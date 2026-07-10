@@ -12,8 +12,7 @@ Known upstream project:
 Current derivative project:
 
 - Name: 哔哩哔哩历史记录保存与分析
-- Repository: https://github.com/rmqg/bilibili-history-wxt
+- Repository: https://github.com/rmqg/bilibili-history-sync
 - Main changes: product copy, analytics for Bilibili history records, cloud-sync guide and SDK, Safari compatibility, four-browser release packaging, privacy and review documents.
 
 This project is not affiliated with, endorsed by, or sponsored by Bilibili, Shanghai Hode Information Technology Co., Ltd., Shanghai Kuanyu Digital Technology Co., Ltd., or their affiliates.
-

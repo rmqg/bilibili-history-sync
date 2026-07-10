@@ -59,8 +59,8 @@
 
 ## 8. 联系方式
 
-使用帮助见：https://blog.rmqg.org/bilibili-history-wxt/support/
+使用帮助见：https://blog.rmqg.org/bilibili-history-sync/support/
 
 问题、隐私请求或安全问题可通过 GitHub Issues 联系：
 
-https://github.com/rmqg/bilibili-history-wxt/issues
+https://github.com/rmqg/bilibili-history-sync/issues

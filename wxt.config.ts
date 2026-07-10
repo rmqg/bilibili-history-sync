@@ -29,7 +29,7 @@ export default defineConfig({
     name: "哔哩哔哩历史记录保存与分析",
     short_name: "历史保存与分析",
     description: "非官方工具：保存哔哩哔哩历史记录，并分析观看进度、视频时长、分区和 UP 主",
-    homepage_url: "https://github.com/rmqg/bilibili-history-wxt",
+    homepage_url: "https://github.com/rmqg/bilibili-history-sync",
     permissions: ["storage", "cookies", "alarms"],
     host_permissions: ["*://bilibili.com/*", "*://*.bilibili.com/*"],
     ...(browser === "firefox"

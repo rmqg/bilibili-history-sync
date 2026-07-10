@@ -10,13 +10,13 @@
 
 搜索词：哔哩哔哩历史记录、B站历史、观看分析、观看进度、视频时长、历史备份
 
-主页：https://github.com/rmqg/bilibili-history-wxt
+主页：https://github.com/rmqg/bilibili-history-sync
 
-支持：https://blog.rmqg.org/bilibili-history-wxt/support/
+支持：https://blog.rmqg.org/bilibili-history-sync/support/
 
-隐私政策：https://blog.rmqg.org/bilibili-history-wxt/privacy-policy/
+隐私政策：https://blog.rmqg.org/bilibili-history-sync/privacy-policy/
 
-Edge 专用隐私政策：https://blog.rmqg.org/bilibili-history-wxt/privacy-policy/edge/
+Edge 专用隐私政策：https://blog.rmqg.org/bilibili-history-sync/privacy-policy/edge/
 
 ## 详细描述
 

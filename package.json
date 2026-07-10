@@ -5,13 +5,13 @@
   "version": "2.0.0",
   "license": "MIT",
   "author": "Bilibili History Plugin Contributors and derivative contributors",
-  "homepage": "https://github.com/rmqg/bilibili-history-wxt",
+  "homepage": "https://github.com/rmqg/bilibili-history-sync",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rmqg/bilibili-history-wxt.git"
+    "url": "https://github.com/rmqg/bilibili-history-sync.git"
   },
   "bugs": {
-    "url": "https://github.com/rmqg/bilibili-history-wxt/issues"
+    "url": "https://github.com/rmqg/bilibili-history-sync/issues"
   },
   "engines": {
     "node": ">=24"
