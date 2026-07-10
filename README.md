@@ -82,6 +82,8 @@ Safari 开发测试：先运行 `pnpm build:safari`，然后在 Safari 的开发
 pnpm release:package
 ```
 
+设置页提供的 Cloudflare Worker 部署源码位于 [`cloudflare-worker/`](cloudflare-worker/)。
+
 ## 来源与二次开发
 
 本项目基于现有 MTI/Bilibili 历史记录扩展项目二次开发。当前仓库能确认的上游项目为 [Bilibili 无限历史记录 / bilibili-history-wxt](https://github.com/mundane799699/bilibili-history-wxt)，许可证为 MIT。

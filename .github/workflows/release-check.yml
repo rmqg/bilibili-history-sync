@@ -43,4 +43,5 @@ jobs:
             .output/*.zip
             .output/SHA256SUMS.txt
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 14
