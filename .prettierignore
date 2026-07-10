@@ -5,3 +5,7 @@ dist
 *.min.js
 *.min.css
 package-lock.json
+LICENSE
+NOTICE
+public/LICENSE
+public/NOTICE

@@ -1,28 +1,22 @@
-import { DBConfig, HistoryItem, LikedMusic } from "./types";
-import dayjs from "dayjs";
+import { DBConfig, HistoryItem, WatchEvent, WatchEventSource } from "./types";
+import { formatDateKey, TimeZonePreference } from "./timezone";
 
 const DB_CONFIG: DBConfig = {
   name: "bilibiliHistory",
-  version: 5,
+  version: 7,
   stores: {
     history: {
       keyPath: "id",
       indexes: ["view_at"],
     },
-    likedMusic: {
-      keyPath: "bvid",
-      indexes: ["added_at"],
-    },
-    favFolders: {
-      keyPath: "id",
-      indexes: ["mid"],
-    },
-    favResources: {
-      keyPath: "id",
-      indexes: ["folder_id", "fav_time"],
+    watchEvents: {
+      keyPath: "event_id",
+      indexes: ["view_at", "history_id", "business"],
     },
   },
 };
+
+const REMOVED_STORES = ["likedMusic", "favFolders", "favResources"] as const;
 
 export const openDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
@@ -32,154 +26,211 @@ export const openDB = (): Promise<IDBDatabase> => {
     request.onsuccess = () => resolve(request.result);
 
     request.onupgradeneeded = (event) => {
-      console.log("onupgradeneeded");
-      const db = (event.target as IDBOpenDBRequest).result;
-      const transaction = (event.target as IDBOpenDBRequest).transaction!;
+      const db = request.result;
+      const transaction = request.transaction;
       const oldVersion = event.oldVersion;
-      const newVersion = event.newVersion || DB_CONFIG.version;
 
-      console.log(`数据库升级: ${oldVersion} -> ${newVersion}`);
-
-      // 首次创建数据库 (oldVersion === 0)
-      if (oldVersion === 0) {
+      if (!db.objectStoreNames.contains("history")) {
         const historyStore = db.createObjectStore("history", { keyPath: "id" });
         historyStore.createIndex("view_at", "view_at", { unique: false });
-
-        const likedMusicStore = db.createObjectStore("likedMusic", {
-          keyPath: "bvid",
-        });
-        likedMusicStore.createIndex("added_at", "added_at", { unique: false });
-
-        const favFoldersStore = db.createObjectStore("favFolders", {
-          keyPath: "id",
-        });
-        favFoldersStore.createIndex("mid", "mid", { unique: false });
-
-        const favResourcesStore = db.createObjectStore("favResources", {
-          keyPath: "id",
-        });
-        favResourcesStore.createIndex("folder_id", "folder_id", { unique: false });
-        favResourcesStore.createIndex("fav_time", "fav_time", { unique: false });
-
-        console.log("首次创建数据库和所有表");
       }
 
-      // 从版本1升级：重命名viewTime字段为view_at
-      if (oldVersion >= 1 && oldVersion < 2) {
-        console.log("开始迁移数据：viewTime -> view_at");
+      if (!db.objectStoreNames.contains("watchEvents")) {
+        const watchEventStore = db.createObjectStore("watchEvents", { keyPath: "event_id" });
+        watchEventStore.createIndex("view_at", "view_at", { unique: false });
+        watchEventStore.createIndex("history_id", "history_id", { unique: false });
+        watchEventStore.createIndex("business", "business", { unique: false });
+      }
 
-        const store = transaction.objectStore("history");
+      if (!transaction) return;
 
-        if (store.indexNames.contains("viewTime")) {
-          store.deleteIndex("viewTime");
-          console.log("删除旧的viewTime索引");
-        }
+      const historyStore = transaction.objectStore("history");
+      const watchEventStore = transaction.objectStore("watchEvents");
+      if (historyStore.indexNames.contains("viewTime")) {
+        historyStore.deleteIndex("viewTime");
+      }
+      if (!historyStore.indexNames.contains("view_at")) {
+        historyStore.createIndex("view_at", "view_at", { unique: false });
+      }
+      if (!watchEventStore.indexNames.contains("view_at")) {
+        watchEventStore.createIndex("view_at", "view_at", { unique: false });
+      }
+      if (!watchEventStore.indexNames.contains("history_id")) {
+        watchEventStore.createIndex("history_id", "history_id", { unique: false });
+      }
+      if (!watchEventStore.indexNames.contains("business")) {
+        watchEventStore.createIndex("business", "business", { unique: false });
+      }
 
-        if (!store.indexNames.contains("view_at")) {
-          store.createIndex("view_at", "view_at", { unique: false });
-          console.log("创建新的view_at索引");
-        }
-
-        const getAllRequest = store.getAll();
+      if (oldVersion > 0 && oldVersion < 2) {
+        const getAllRequest = historyStore.getAll();
         getAllRequest.onsuccess = () => {
-          const allRecords = getAllRequest.result;
-          console.log(`开始迁移 ${allRecords.length} 条记录`);
-
-          allRecords.forEach((record: any) => {
-            if (record.viewTime !== undefined) {
-              record.view_at = record.viewTime;
-              delete record.viewTime;
-              store.put(record);
+          getAllRequest.result.forEach((record: any) => {
+            if (record.viewTime !== undefined && record.view_at === undefined) {
+              historyStore.put({
+                ...record,
+                view_at: record.viewTime,
+                viewTime: undefined,
+              });
             }
           });
-
-          console.log("数据迁移完成");
-        };
-
-        getAllRequest.onerror = () => {
-          console.error("数据迁移失败:", getAllRequest.error);
         };
       }
 
-      // 兜底修复：检查并补创建所有缺失的 store
-      // 修复旧版本 else-if 互斥导致部分 store 未创建的问题
-      if (!db.objectStoreNames.contains("history")) {
-        console.log("补创建history表");
-        const historyStore = db.createObjectStore("history", { keyPath: "id" });
-        historyStore.createIndex("view_at", "view_at", { unique: false });
+      if (oldVersion > 0 && oldVersion < 7) {
+        const getAllRequest = historyStore.getAll();
+        getAllRequest.onsuccess = () => {
+          getAllRequest.result.forEach((record: HistoryItem & { viewTime?: number }) => {
+            const viewAt = record.view_at ?? record.viewTime;
+            if (!record?.id || !viewAt) return;
+            watchEventStore.put(createWatchEvent({ ...record, view_at: viewAt }, "migration"));
+          });
+        };
       }
 
-      if (!db.objectStoreNames.contains("likedMusic")) {
-        console.log("补创建likedMusic表");
-        const likedMusicStore = db.createObjectStore("likedMusic", {
-          keyPath: "bvid",
-        });
-        likedMusicStore.createIndex("added_at", "added_at", { unique: false });
-      }
-
-      if (!db.objectStoreNames.contains("favFolders")) {
-        console.log("补创建favFolders表");
-        const favFoldersStore = db.createObjectStore("favFolders", {
-          keyPath: "id",
-        });
-        favFoldersStore.createIndex("mid", "mid", { unique: false });
-      }
-
-      if (!db.objectStoreNames.contains("favResources")) {
-        console.log("补创建favResources表");
-        const favResourcesStore = db.createObjectStore("favResources", {
-          keyPath: "id",
-        });
-        favResourcesStore.createIndex("folder_id", "folder_id", { unique: false });
-        favResourcesStore.createIndex("fav_time", "fav_time", { unique: false });
+      for (const storeName of REMOVED_STORES) {
+        if (db.objectStoreNames.contains(storeName)) {
+          db.deleteObjectStore(storeName);
+        }
       }
     };
   });
 };
 
-export const saveHistory = async (history: HistoryItem[]): Promise<void> => {
-  const db = await openDB();
-  const tx = db.transaction("history", "readwrite");
-  const store = tx.objectStore("history");
+export const buildWatchEventId = (
+  business: string | undefined,
+  historyId: number | string,
+  viewAt: number | string,
+) => `${business || "archive"}:${historyId}:${viewAt}`;
 
+export const createWatchEvent = (
+  item: HistoryItem,
+  source: WatchEventSource = "history_cursor",
+): WatchEvent => {
+  const historyId = Number(item.id);
+  const viewAt = Number(item.view_at);
+
+  return {
+    event_id: buildWatchEventId(item.business, historyId, viewAt),
+    history_id: historyId,
+    business: item.business || "archive",
+    bvid: item.bvid || "",
+    cid: item.cid,
+    title: item.title || "",
+    tag_name: item.tag_name,
+    cover: item.cover || "",
+    view_at: viewAt,
+    uri: item.uri,
+    author_name: item.author_name || "",
+    author_mid: item.author_mid,
+    progress: item.progress,
+    duration: item.duration,
+    is_fav: item.is_fav,
+    source,
+    recorded_at: item.timestamp || Date.now(),
+  };
+};
+
+export const putHistoryAndWatchEvent = (
+  historyStore: IDBObjectStore,
+  watchEventStore: IDBObjectStore,
+  item: HistoryItem,
+  source: WatchEventSource = "history_cursor",
+) => {
+  historyStore.put(item);
+  watchEventStore.put(createWatchEvent(item, source));
+};
+
+const runTransaction = (tx: IDBTransaction): Promise<void> => {
   return new Promise((resolve, reject) => {
-    let operationsCompleted = 0;
-    let operationsFailed = false;
-
-    if (history.length === 0) {
-      resolve();
-      return;
-    }
-
-    history.forEach((item) => {
-      if (operationsFailed) return;
-
-      const request = store.put(item);
-      request.onsuccess = () => {
-        operationsCompleted++;
-      };
-      request.onerror = () => {
-        if (!operationsFailed) {
-          operationsFailed = true;
-          console.error("向 IndexedDB 中 put 项目失败:", request.error, "项目:", item);
-        }
-      };
-    });
-
-    tx.oncomplete = () => {
-      if (!operationsFailed) {
-        console.log("所有历史记录已成功保存/更新。");
-        resolve();
-      } else {
-        reject(new Error("部分或全部历史记录项保存失败，但事务意外完成。"));
-      }
-    };
-
-    tx.onerror = () => {
-      console.error("保存/更新历史记录事务失败:", tx.error);
-      reject(tx.error);
-    };
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error);
   });
+};
+
+export const saveHistory = async (history: HistoryItem[]): Promise<void> => {
+  if (history.length === 0) return;
+
+  const db = await openDB();
+  const tx = db.transaction(["history", "watchEvents"], "readwrite");
+  const historyStore = tx.objectStore("history");
+  const watchEventStore = tx.objectStore("watchEvents");
+
+  history.forEach((item) => {
+    putHistoryAndWatchEvent(historyStore, watchEventStore, item, "import");
+  });
+
+  await runTransaction(tx);
+};
+
+export const saveWatchEvents = async (events: WatchEvent[]): Promise<void> => {
+  if (events.length === 0) return;
+
+  const db = await openDB();
+  const tx = db.transaction("watchEvents", "readwrite");
+  const store = tx.objectStore("watchEvents");
+
+  events.forEach((event) => {
+    store.put(event);
+  });
+
+  await runTransaction(tx);
+};
+
+const matchBusinessType = (item: HistoryItem, businessType: string) => {
+  if (!businessType || businessType === "all") return true;
+  if (businessType === "article") {
+    return item.business === "article" || item.business === "article-list";
+  }
+  return item.business === businessType;
+};
+
+const matchDate = (
+  item: HistoryItem,
+  dateRange: { start: string; end: string } | null,
+  timeZone: TimeZonePreference,
+) => {
+  if (!dateRange?.start) return true;
+
+  const dateStr = formatDateKey(Number(item.view_at) * 1000, timeZone);
+  if (!dateRange.end) return dateStr === dateRange.start;
+  return dateStr >= dateRange.start && dateStr <= dateRange.end;
+};
+
+const matchKeyword = (
+  item: HistoryItem,
+  keyword: string,
+  searchType: "all" | "title" | "up" | "bvid" | "avid" = "all",
+) => {
+  const value = keyword.trim().toLowerCase();
+  if (!value) return true;
+
+  const title = item.title?.toLowerCase() || "";
+  const authorName = item.author_name?.toLowerCase() || "";
+  const bvid = item.bvid?.toLowerCase() || "";
+  const authorMid = item.author_mid ? String(item.author_mid).toLowerCase() : "";
+  const avid = item.id ? String(item.id) : "";
+
+  switch (searchType) {
+    case "title":
+      return title.includes(value);
+    case "up":
+      return authorName.includes(value) || authorMid.includes(value);
+    case "bvid":
+      return bvid.includes(value);
+    case "avid":
+      return avid.includes(value);
+    case "all":
+    default:
+      return (
+        title.includes(value) ||
+        authorName.includes(value) ||
+        bvid.includes(value) ||
+        authorMid.includes(value) ||
+        avid.includes(value)
+      );
+  }
 };
 
 const matchCondition = (
@@ -188,70 +239,13 @@ const matchCondition = (
   dateRange: { start: string; end: string } | null,
   businessType: string,
   searchType: "all" | "title" | "up" | "bvid" | "avid" = "all",
+  timeZone: TimeZonePreference = "system",
 ) => {
   return (
     matchKeyword(item, keyword, searchType) &&
-    matchDate(item, dateRange) &&
+    matchDate(item, dateRange, timeZone) &&
     matchBusinessType(item, businessType)
   );
-};
-
-const matchBusinessType = (item: HistoryItem, businessType: string) => {
-  if (!businessType || businessType === "all") return true;
-  // 专栏有两种类型：article 和 article-list，这里统一处理
-  if (businessType === "article") {
-    return item.business === "article" || item.business === "article-list";
-  }
-  return item.business === businessType;
-};
-
-const matchDate = (item: HistoryItem, dateRange: { start: string; end: string } | null) => {
-  if (!dateRange || !dateRange.start) {
-    return true;
-  }
-  const ts = Number(item.view_at);
-  const d = dayjs(ts * 1000);
-  const dateStr = d.format("YYYY-MM-DD");
-
-  if (dateRange.start && !dateRange.end) {
-    return dateStr === dateRange.start;
-  }
-  if (dateRange.start && dateRange.end) {
-    return dateStr >= dateRange.start && dateStr <= dateRange.end;
-  }
-  return true;
-};
-
-const matchKeyword = (
-  item: HistoryItem,
-  keyword: string,
-  searchType: "all" | "title" | "up" | "bvid" | "avid" = "all",
-) => {
-  if (!keyword) return true;
-  const lowerKeyword = keyword.toLowerCase();
-
-  switch (searchType) {
-    case "title":
-      return item.title.toLowerCase().includes(lowerKeyword);
-    case "up":
-      return (
-        item.author_name.toLowerCase().includes(lowerKeyword) ||
-        (item.author_mid && String(item.author_mid).toLowerCase().includes(lowerKeyword))
-      );
-    case "bvid":
-      return item.bvid && item.bvid.toLowerCase().includes(lowerKeyword);
-    case "avid":
-      return item.id && String(item.id).includes(lowerKeyword);
-    case "all":
-    default:
-      return (
-        item.title.toLowerCase().includes(lowerKeyword) ||
-        item.author_name.toLowerCase().includes(lowerKeyword) ||
-        (item.bvid && item.bvid.toLowerCase().includes(lowerKeyword)) ||
-        (item.author_mid && String(item.author_mid).toLowerCase().includes(lowerKeyword)) ||
-        (item.id && String(item.id).includes(lowerKeyword))
-      );
-  }
 };
 
 export const getTotalHistoryCount = async (): Promise<number> => {
@@ -261,133 +255,83 @@ export const getTotalHistoryCount = async (): Promise<number> => {
 
   return new Promise<number>((resolve, reject) => {
     const request = store.count();
-
-    request.onsuccess = () => {
-      resolve(request.result);
-    };
-
-    request.onerror = () => {
-      console.error("获取历史记录总数失败:", request.error);
-      reject(request.error);
-    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
   });
 };
 
 export const getHistory = async (
-  lastViewTime: any = "",
+  lastViewTime: number | "" = "",
   pageSize: number = 20,
   keyword: string = "",
   dateRange: { start: string; end: string } | null = null,
   businessType: string = "",
   searchType: "all" | "title" | "up" | "bvid" | "avid" = "all",
+  timeZone: TimeZonePreference = "system",
 ): Promise<{ items: HistoryItem[]; hasMore: boolean }> => {
   const db = await openDB();
   const tx = db.transaction("history", "readonly");
   const store = tx.objectStore("history");
   const index = store.index("view_at");
-
-  let range = null;
-  if (lastViewTime) {
-    range = IDBKeyRange.upperBound(lastViewTime, true);
-  }
-
-  // 使用游标按view_at降序获取指定页的数据
-  const request = index.openCursor(range, "prev");
-  const items: HistoryItem[] = [];
-  let hasMore = false;
+  const range = lastViewTime ? IDBKeyRange.upperBound(lastViewTime, true) : null;
 
   return new Promise((resolve, reject) => {
+    const request = index.openCursor(range, "prev");
+    const items: HistoryItem[] = [];
+
     request.onsuccess = (event) => {
-      const cursor = (event.target as IDBRequest).result as IDBCursorWithValue;
-
-      if (cursor) {
-        const value = cursor.value as HistoryItem;
-
-        // 如果还没收集够数据，继续收集
-        if (items.length < pageSize) {
-          if (matchCondition(value, keyword, dateRange, businessType, searchType)) {
-            items.push(value);
-          }
-          cursor.continue();
-        } else {
-          // 已经收集够数据，检查是否还有更多
-          hasMore = true;
-          resolve({
-            items,
-            hasMore,
-          });
-        }
-      } else {
-        // 没有更多数据了
-        resolve({
-          items,
-          hasMore,
-        });
+      const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
+      if (!cursor) {
+        resolve({ items, hasMore: false });
+        return;
       }
+
+      if (items.length >= pageSize) {
+        resolve({ items, hasMore: true });
+        return;
+      }
+
+      const item = cursor.value as HistoryItem;
+      if (matchCondition(item, keyword, dateRange, businessType, searchType, timeZone)) {
+        items.push(item);
+      }
+      cursor.continue();
     };
 
     request.onerror = () => reject(request.error);
   });
 };
 
-export const deleteDB = () => {
-  return new Promise<void>((resolve, reject) => {
-    const request = indexedDB.deleteDatabase(DB_CONFIG.name);
-    request.onsuccess = () => {
-      console.log("数据库删除成功");
-      resolve();
-    };
-    request.onerror = () => {
-      console.error("数据库删除失败:", request.error);
-      reject(request.error);
-    };
-  });
-};
-
-export const getItem = async (store: IDBObjectStore, key: string): Promise<any> => {
-  return new Promise((resolve) => {
+export const getItem = (store: IDBObjectStore, key: IDBValidKey): Promise<unknown> => {
+  return new Promise((resolve, reject) => {
     const request = store.get(key);
     request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
   });
 };
 
-export const clearHistory = async (): Promise<void> => {
+export const getAllWatchEvents = async (): Promise<WatchEvent[]> => {
   const db = await openDB();
-  const tx = db.transaction("history", "readwrite");
-  const store = tx.objectStore("history");
+  const tx = db.transaction("watchEvents", "readonly");
+  const store = tx.objectStore("watchEvents");
+  const index = store.index("view_at");
 
-  return new Promise<void>((resolve, reject) => {
-    const request = store.clear();
+  return new Promise((resolve, reject) => {
+    const request = index.openCursor(null, "prev");
+    const items: WatchEvent[] = [];
 
-    request.onsuccess = () => {
-      console.log("历史记录已清空");
-      resolve();
+    request.onsuccess = (event) => {
+      const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
+      if (!cursor) {
+        resolve(items);
+        return;
+      }
+
+      items.push(cursor.value as WatchEvent);
+      cursor.continue();
     };
 
-    request.onerror = () => {
-      console.error("清空历史记录失败:", request.error);
-      reject(request.error);
-    };
-  });
-};
-
-export const deleteHistoryItem = async (id: number): Promise<void> => {
-  const db = await openDB();
-  const tx = db.transaction("history", "readwrite");
-  const store = tx.objectStore("history");
-
-  return new Promise<void>((resolve, reject) => {
-    const request = store.delete(id);
-
-    request.onsuccess = () => {
-      console.log("历史记录删除成功, id =", id);
-      resolve();
-    };
-
-    request.onerror = () => {
-      console.error("删除历史记录失败, id =", id, request.error);
-      reject(request.error);
-    };
+    request.onerror = () => reject(request.error);
   });
 };
 
@@ -402,787 +346,16 @@ export const getAllHistory = async (limit?: number): Promise<HistoryItem[]> => {
     const items: HistoryItem[] = [];
 
     request.onsuccess = (event) => {
-      const cursor = (event.target as IDBRequest).result as IDBCursorWithValue;
-
-      if (cursor) {
-        items.push(cursor.value as HistoryItem);
-        if (limit && items.length >= limit) {
-          resolve(items);
-        } else {
-          cursor.continue();
-        }
-      } else {
+      const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
+      if (!cursor || (limit && items.length >= limit)) {
         resolve(items);
+        return;
       }
+
+      items.push(cursor.value as HistoryItem);
+      cursor.continue();
     };
 
     request.onerror = () => reject(request.error);
-  });
-};
-
-export const getUnUploadedHistory = async (): Promise<HistoryItem[]> => {
-  const db = await openDB();
-  const tx = db.transaction("history", "readonly");
-  const store = tx.objectStore("history");
-  const index = store.index("view_at");
-
-  return new Promise((resolve, reject) => {
-    const request = index.openCursor(null, "prev");
-    const items: HistoryItem[] = [];
-
-    request.onsuccess = (event) => {
-      const cursor = (event.target as IDBRequest).result as IDBCursorWithValue;
-
-      if (cursor) {
-        const item = cursor.value as HistoryItem;
-        // 获取uploaded不为true的数据（包括undefined和false）
-        if (item.uploaded !== true) {
-          items.push(item);
-        }
-        cursor.continue();
-      } else {
-        resolve(items);
-      }
-    };
-
-    request.onerror = () => reject(request.error);
-  });
-};
-
-export const markHistoryAsUploaded = async (historyItems: HistoryItem[]): Promise<void> => {
-  const db = await openDB();
-  const tx = db.transaction("history", "readwrite");
-  const store = tx.objectStore("history");
-
-  return new Promise((resolve, reject) => {
-    let operationsCompleted = 0;
-    let operationsFailed = false;
-
-    if (historyItems.length === 0) {
-      resolve();
-      return;
-    }
-
-    historyItems.forEach((item) => {
-      if (operationsFailed) return;
-
-      // 更新item的uploaded字段
-      const updatedItem = { ...item, uploaded: true };
-      const request = store.put(updatedItem);
-
-      request.onsuccess = () => {
-        operationsCompleted++;
-      };
-
-      request.onerror = () => {
-        if (!operationsFailed) {
-          operationsFailed = true;
-          console.error("更新 IndexedDB 中项目的uploaded状态失败:", request.error, "项目:", item);
-        }
-      };
-    });
-
-    tx.oncomplete = () => {
-      if (!operationsFailed) {
-        console.log(`成功标记 ${historyItems.length} 条历史记录为已上传。`);
-        resolve();
-      } else {
-        reject(new Error("部分或全部历史记录项更新失败，但事务意外完成。"));
-      }
-    };
-
-    tx.onerror = () => {
-      console.error("更新历史记录uploaded状态事务失败:", tx.error);
-      reject(tx.error);
-    };
-  });
-};
-
-export const markAllHistoryAsUnuploaded = async (): Promise<void> => {
-  const db = await openDB();
-  const tx = db.transaction("history", "readwrite");
-  const store = tx.objectStore("history");
-
-  return new Promise<void>((resolve, reject) => {
-    const request = store.openCursor();
-    let updatedCount = 0;
-
-    request.onsuccess = (event) => {
-      const cursor = (event.target as IDBRequest).result as IDBCursorWithValue;
-
-      if (cursor) {
-        const item = cursor.value as HistoryItem;
-        // 只有在尚未标记为未上传时才更新
-        if (item.uploaded !== false) {
-          const updatedItem = { ...item, uploaded: false };
-          const updateRequest = cursor.update(updatedItem);
-          updateRequest.onsuccess = () => {
-            updatedCount++;
-          };
-        }
-        cursor.continue();
-      } else {
-        // 游标完成，事务将自动完成。
-      }
-    };
-
-    request.onerror = () => {
-      console.error("在标记所有历史记录为未上传时发生错误:", request.error);
-      reject(request.error);
-    };
-
-    tx.oncomplete = () => {
-      console.log(`成功将 ${updatedCount} 条历史记录标记为未上传。`);
-      resolve();
-    };
-
-    tx.onerror = () => {
-      console.error("标记所有历史记录为未上传的事务失败:", tx.error);
-      reject(tx.error);
-    };
-  });
-};
-
-// 喜欢音乐相关函数
-export const saveLikedMusic = async (music: LikedMusic): Promise<void> => {
-  const db = await openDB();
-  const tx = db.transaction("likedMusic", "readwrite");
-  const store = tx.objectStore("likedMusic");
-
-  return new Promise((resolve, reject) => {
-    const request = store.put(music);
-
-    request.onsuccess = () => {
-      console.log("喜欢的音乐已保存:", music.title);
-      resolve();
-    };
-
-    request.onerror = () => {
-      console.error("保存喜欢的音乐失败:", request.error);
-      reject(request.error);
-    };
-  });
-};
-
-export const isLikedMusic = async (bvid: string): Promise<boolean> => {
-  const db = await openDB();
-  const tx = db.transaction("likedMusic", "readonly");
-  const store = tx.objectStore("likedMusic");
-
-  return new Promise((resolve, reject) => {
-    const request = store.get(bvid);
-
-    request.onsuccess = () => {
-      resolve(!!request.result);
-    };
-
-    request.onerror = () => {
-      console.error("检查音乐是否已喜欢失败:", request.error);
-      reject(request.error);
-    };
-  });
-};
-
-export const getLikedMusic = async (
-  lastAddedTime: number = Date.now(),
-  pageSize: number = 20,
-  keyword: string = "",
-): Promise<{ items: LikedMusic[]; hasMore: boolean }> => {
-  const db = await openDB();
-  const tx = db.transaction("likedMusic", "readonly");
-  const store = tx.objectStore("likedMusic");
-  const index = store.index("added_at");
-
-  const range = IDBKeyRange.upperBound(lastAddedTime, true);
-  const request = index.openCursor(range, "prev");
-  const items: LikedMusic[] = [];
-  let hasMore = false;
-
-  return new Promise((resolve, reject) => {
-    request.onsuccess = (event) => {
-      const cursor = (event.target as IDBRequest).result as IDBCursorWithValue;
-
-      if (cursor) {
-        const value = cursor.value as LikedMusic;
-
-        if (items.length < pageSize) {
-          if (
-            !keyword ||
-            value.title.toLowerCase().includes(keyword.toLowerCase()) ||
-            value.author.toLowerCase().includes(keyword.toLowerCase())
-          ) {
-            items.push(value);
-          }
-          cursor.continue();
-        } else {
-          hasMore = true;
-          resolve({ items, hasMore });
-        }
-      } else {
-        resolve({ items, hasMore });
-      }
-    };
-
-    request.onerror = () => {
-      console.error("获取喜欢音乐失败:", request.error);
-      reject(request.error);
-    };
-  });
-};
-
-export const getAllLikedMusic = async (): Promise<LikedMusic[]> => {
-  const db = await openDB();
-  const tx = db.transaction("likedMusic", "readonly");
-  const store = tx.objectStore("likedMusic");
-  const index = store.index("added_at");
-
-  return new Promise((resolve, reject) => {
-    const request = index.openCursor(null, "prev");
-    const items: LikedMusic[] = [];
-
-    request.onsuccess = (event) => {
-      const cursor = (event.target as IDBRequest).result as IDBCursorWithValue;
-
-      if (cursor) {
-        items.push(cursor.value as LikedMusic);
-        cursor.continue();
-      } else {
-        resolve(items);
-      }
-    };
-
-    request.onerror = () => {
-      console.error("获取所有喜欢音乐失败:", request.error);
-      reject(request.error);
-    };
-  });
-};
-
-export const getTotalLikedMusicCount = async (): Promise<number> => {
-  const db = await openDB();
-  const tx = db.transaction("likedMusic", "readonly");
-  const store = tx.objectStore("likedMusic");
-
-  return new Promise<number>((resolve, reject) => {
-    const request = store.count();
-
-    request.onsuccess = () => {
-      resolve(request.result);
-    };
-
-    request.onerror = () => {
-      console.error("获取喜欢音乐总数失败:", request.error);
-      reject(request.error);
-    };
-  });
-};
-
-export const deleteLikedMusic = async (bvid: string): Promise<void> => {
-  const db = await openDB();
-  const tx = db.transaction("likedMusic", "readwrite");
-  const store = tx.objectStore("likedMusic");
-
-  return new Promise<void>((resolve, reject) => {
-    const request = store.delete(bvid);
-
-    request.onsuccess = () => {
-      console.log("喜欢的音乐删除成功, bvid =", bvid);
-      resolve();
-    };
-
-    request.onerror = () => {
-      console.error("删除喜欢的音乐失败, bvid =", bvid, request.error);
-      reject(request.error);
-    };
-  });
-};
-
-// deleteLikedMusicByBvid 现在与 deleteLikedMusic 功能相同，保留为别名
-export const deleteLikedMusicByBvid = deleteLikedMusic;
-
-export const clearLikedMusic = async (): Promise<void> => {
-  const db = await openDB();
-  const tx = db.transaction("likedMusic", "readwrite");
-  const store = tx.objectStore("likedMusic");
-
-  return new Promise<void>((resolve, reject) => {
-    const request = store.clear();
-
-    request.onsuccess = () => {
-      console.log("喜欢的音乐已全部清空");
-      resolve();
-    };
-
-    request.onerror = () => {
-      console.error("清空喜欢的音乐失败:", request.error);
-      reject(request.error);
-    };
-  });
-};
-
-export const importLikedMusic = async (musicList: LikedMusic[]): Promise<void> => {
-  const db = await openDB();
-  const tx = db.transaction("likedMusic", "readwrite");
-  const store = tx.objectStore("likedMusic");
-
-  return new Promise((resolve, reject) => {
-    let operationsCompleted = 0;
-    let operationsFailed = false;
-
-    if (musicList.length === 0) {
-      resolve();
-      return;
-    }
-
-    musicList.forEach((music) => {
-      if (operationsFailed) return;
-
-      const request = store.put(music);
-      request.onsuccess = () => {
-        operationsCompleted++;
-      };
-      request.onerror = () => {
-        if (!operationsFailed) {
-          operationsFailed = true;
-          console.error("向 IndexedDB 中 put 喜欢音乐项目失败:", request.error, "项目:", music);
-        }
-      };
-    });
-
-    tx.oncomplete = () => {
-      if (!operationsFailed) {
-        console.log("所有喜欢音乐已成功导入。");
-        resolve();
-      } else {
-        reject(new Error("部分或全部喜欢音乐项目导入失败，但事务意外完成。"));
-      }
-    };
-
-    tx.onerror = () => {
-      console.error("导入喜欢音乐事务失败:", tx.error);
-      reject(tx.error);
-    };
-  });
-};
-
-import { FavoriteFolder, FavoriteResource } from "./types";
-
-// 收藏夹相关函数
-export const saveFavFolders = async (folders: FavoriteFolder[]): Promise<void> => {
-  const db = await openDB();
-  const tx = db.transaction("favFolders", "readwrite");
-  const store = tx.objectStore("favFolders");
-
-  return new Promise((resolve, reject) => {
-    let operationsCompleted = 0;
-    let operationsFailed = false;
-
-    if (folders.length === 0) {
-      resolve();
-      return;
-    }
-
-    folders.forEach((folder) => {
-      if (operationsFailed) return;
-      const request = store.put(folder);
-      request.onsuccess = () => operationsCompleted++;
-      request.onerror = () => {
-        if (!operationsFailed) {
-          operationsFailed = true;
-          reject(request.error);
-        }
-      };
-    });
-
-    tx.oncomplete = () => {
-      if (!operationsFailed) resolve();
-    };
-    tx.onerror = () => reject(tx.error);
-  });
-};
-
-export const getFavFolders = async (mid?: number): Promise<FavoriteFolder[]> => {
-  const db = await openDB();
-  const tx = db.transaction("favFolders", "readonly");
-  const store = tx.objectStore("favFolders");
-
-  return new Promise((resolve, reject) => {
-    let request;
-    if (mid) {
-      const index = store.index("mid");
-      request = index.getAll(mid);
-    } else {
-      request = store.getAll();
-    }
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-};
-
-export const saveFavResources = async (resources: FavoriteResource[]): Promise<void> => {
-  const db = await openDB();
-  const tx = db.transaction("favResources", "readwrite");
-  const store = tx.objectStore("favResources");
-
-  return new Promise((resolve, reject) => {
-    let operationsCompleted = 0;
-    let operationsFailed = false;
-
-    if (resources.length === 0) {
-      resolve();
-      return;
-    }
-
-    // 递归处理每一个资源，因为我们需要在put之前可能进行get操作（异步）
-    // 虽然可以在事务中并行发起请求，但为了逻辑清晰，我们使用 Promise.all 或者计数器
-
-    // 这里我们直接发起所有请求，利用IndexedDB的事务特性
-    resources.forEach((res) => {
-      if (operationsFailed) return;
-
-      // 检查是否是失效视频
-      if (res.title === "已失效视频") {
-        const getReq = store.get(res.id);
-        getReq.onsuccess = () => {
-          const oldData = getReq.result as FavoriteResource;
-          let dataToSave = res;
-
-          // 如果本地有旧数据，且旧数据是有效的（标题不是已失效视频）
-          // 那么保留旧数据的关键元数据
-          if (oldData && oldData.title !== "已失效视频") {
-            dataToSave = {
-              ...res,
-              title: oldData.title,
-              cover: oldData.cover,
-              intro: oldData.intro,
-              upper: oldData.upper,
-              ctime: oldData.ctime, // 保持创建时间
-              // 可以根据需要保留更多字段
-            };
-            console.log(`[失效保护] 保留了视频 ${oldData.id} 的元数据: ${oldData.title}`);
-          }
-
-          const putReq = store.put(dataToSave);
-          putReq.onsuccess = () => CheckComplete();
-          putReq.onerror = HandleError;
-        };
-        getReq.onerror = HandleError;
-      } else {
-        // 正常视频直接保存
-        const putReq = store.put(res);
-        putReq.onsuccess = () => CheckComplete();
-        putReq.onerror = HandleError;
-      }
-
-      function HandleError(e: Event) {
-        if (!operationsFailed) {
-          operationsFailed = true;
-          reject((e.target as IDBRequest).error);
-        }
-      }
-
-      function CheckComplete() {
-        operationsCompleted++;
-        if (operationsCompleted === resources.length && !operationsFailed) {
-          // 此时不能resolve，因为外层还有tx.oncomplete
-        }
-      }
-    });
-
-    tx.oncomplete = () => {
-      if (!operationsFailed) resolve();
-    };
-    tx.onerror = () => reject(tx.error);
-  });
-};
-
-export const checkIsFavorited = async (id: number): Promise<boolean> => {
-  const db = await openDB();
-  const tx = db.transaction("favResources", "readonly");
-  const store = tx.objectStore("favResources");
-
-  return new Promise((resolve) => {
-    const request = store.get(id);
-    request.onsuccess = () => {
-      resolve(!!request.result);
-    };
-    request.onerror = () => {
-      resolve(false);
-    };
-  });
-};
-
-export const getFavResources = async (folderId?: number): Promise<FavoriteResource[]> => {
-  const db = await openDB();
-  const tx = db.transaction("favResources", "readonly");
-  const store = tx.objectStore("favResources");
-
-  return new Promise((resolve, reject) => {
-    let request;
-    if (folderId) {
-      const index = store.index("folder_id");
-      request = index.getAll(folderId);
-    } else {
-      request = store.getAll();
-    }
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-};
-
-export const deleteFavResources = async (ids: number[]): Promise<void> => {
-  const db = await openDB();
-  const tx = db.transaction("favResources", "readwrite");
-  const store = tx.objectStore("favResources");
-
-  return new Promise((resolve, reject) => {
-    let operationsCompleted = 0;
-    let operationsFailed = false;
-
-    if (ids.length === 0) {
-      resolve();
-      return;
-    }
-
-    ids.forEach((id) => {
-      if (operationsFailed) return;
-      const request = store.delete(id);
-      request.onsuccess = () => operationsCompleted++;
-      request.onerror = () => {
-        if (!operationsFailed) {
-          operationsFailed = true;
-          reject(request.error);
-        }
-      };
-    });
-
-    tx.oncomplete = () => {
-      if (!operationsFailed) resolve();
-    };
-    tx.onerror = () => reject(tx.error);
-  });
-};
-
-// ========== 数据同步辅助函数 ==========
-
-/**
- * 获取所有收藏夹文件夹
- */
-export const getAllFavFolders = async (): Promise<FavoriteFolder[]> => {
-  const db = await openDB();
-  const tx = db.transaction("favFolders", "readonly");
-  const store = tx.objectStore("favFolders");
-
-  return new Promise((resolve, reject) => {
-    const request = store.getAll();
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-};
-
-/**
- * 获取所有收藏夹资源
- */
-export const getAllFavResources = async (): Promise<FavoriteResource[]> => {
-  const db = await openDB();
-  const tx = db.transaction("favResources", "readonly");
-  const store = tx.objectStore("favResources");
-
-  return new Promise((resolve, reject) => {
-    const request = store.getAll();
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-};
-
-/**
- * 批量导入收藏夹文件夹（直接 upsert，无时间戳字段）
- */
-export const importFavFolders = async (folders: FavoriteFolder[]): Promise<void> => {
-  const db = await openDB();
-  const tx = db.transaction("favFolders", "readwrite");
-  const store = tx.objectStore("favFolders");
-
-  return new Promise((resolve, reject) => {
-    if (folders.length === 0) {
-      resolve();
-      return;
-    }
-
-    folders.forEach((folder) => {
-      store.put(folder);
-    });
-
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-};
-
-/**
- * 批量导入收藏夹资源（直接 upsert）
- */
-export const importFavResources = async (resources: FavoriteResource[]): Promise<void> => {
-  const db = await openDB();
-  const tx = db.transaction("favResources", "readwrite");
-  const store = tx.objectStore("favResources");
-
-  return new Promise((resolve, reject) => {
-    if (resources.length === 0) {
-      resolve();
-      return;
-    }
-
-    resources.forEach((res) => {
-      store.put(res);
-    });
-
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-};
-
-/**
- * 智能合并历史记录：按 view_at 时间戳比对，仅远端更新时覆盖
- */
-export const smartMergeHistory = async (
-  remoteItems: HistoryItem[],
-): Promise<{ merged: number; skipped: number }> => {
-  const db = await openDB();
-  const tx = db.transaction("history", "readwrite");
-  const store = tx.objectStore("history");
-  let merged = 0;
-  let skipped = 0;
-
-  return new Promise((resolve, reject) => {
-    if (remoteItems.length === 0) {
-      resolve({ merged: 0, skipped: 0 });
-      return;
-    }
-
-    let processed = 0;
-    const total = remoteItems.length;
-
-    remoteItems.forEach((remoteItem) => {
-      const getReq = store.get(remoteItem.id);
-      getReq.onsuccess = () => {
-        const localItem = getReq.result as HistoryItem | undefined;
-
-        if (!localItem || remoteItem.view_at >= localItem.view_at) {
-          // 本地不存在或远端更新，执行覆盖
-          store.put(remoteItem);
-          merged++;
-        } else {
-          skipped++;
-        }
-
-        processed++;
-        if (processed === total) {
-          // 所有请求已提交，等待事务完成
-        }
-      };
-      getReq.onerror = () => {
-        // 获取失败时仍尝试写入
-        store.put(remoteItem);
-        merged++;
-        processed++;
-      };
-    });
-
-    tx.oncomplete = () => resolve({ merged, skipped });
-    tx.onerror = () => reject(tx.error);
-  });
-};
-
-/**
- * 智能合并喜欢的音乐：按 added_at 时间戳比对
- */
-export const smartMergeLikedMusic = async (
-  remoteItems: LikedMusic[],
-): Promise<{ merged: number; skipped: number }> => {
-  const db = await openDB();
-  const tx = db.transaction("likedMusic", "readwrite");
-  const store = tx.objectStore("likedMusic");
-  let merged = 0;
-  let skipped = 0;
-
-  return new Promise((resolve, reject) => {
-    if (remoteItems.length === 0) {
-      resolve({ merged: 0, skipped: 0 });
-      return;
-    }
-
-    let processed = 0;
-    const total = remoteItems.length;
-
-    remoteItems.forEach((remoteItem) => {
-      const getReq = store.get(remoteItem.bvid);
-      getReq.onsuccess = () => {
-        const localItem = getReq.result as LikedMusic | undefined;
-
-        if (!localItem || remoteItem.added_at >= localItem.added_at) {
-          store.put(remoteItem);
-          merged++;
-        } else {
-          skipped++;
-        }
-
-        processed++;
-      };
-      getReq.onerror = () => {
-        store.put(remoteItem);
-        merged++;
-        processed++;
-      };
-    });
-
-    tx.oncomplete = () => resolve({ merged, skipped });
-    tx.onerror = () => reject(tx.error);
-  });
-};
-
-/**
- * 智能合并收藏夹资源：按 fav_time 时间戳比对
- */
-export const smartMergeFavResources = async (
-  remoteItems: FavoriteResource[],
-): Promise<{ merged: number; skipped: number }> => {
-  const db = await openDB();
-  const tx = db.transaction("favResources", "readwrite");
-  const store = tx.objectStore("favResources");
-  let merged = 0;
-  let skipped = 0;
-
-  return new Promise((resolve, reject) => {
-    if (remoteItems.length === 0) {
-      resolve({ merged: 0, skipped: 0 });
-      return;
-    }
-
-    let processed = 0;
-    const total = remoteItems.length;
-
-    remoteItems.forEach((remoteItem) => {
-      const getReq = store.get(remoteItem.id);
-      getReq.onsuccess = () => {
-        const localItem = getReq.result as FavoriteResource | undefined;
-
-        if (!localItem || remoteItem.fav_time >= localItem.fav_time) {
-          store.put(remoteItem);
-          merged++;
-        } else {
-          skipped++;
-        }
-
-        processed++;
-      };
-      getReq.onerror = () => {
-        store.put(remoteItem);
-        merged++;
-        processed++;
-      };
-    });
-
-    tx.oncomplete = () => resolve({ merged, skipped });
-    tx.onerror = () => reject(tx.error);
   });
 };

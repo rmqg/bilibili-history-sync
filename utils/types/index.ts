@@ -1,28 +1,44 @@
+export type HistoryBusiness =
+  "archive" | "pgc" | "article" | "article-list" | "live" | "cheese" | (string & {});
+
 export interface HistoryItem {
-  bvid: string;
-  title: string;
-  cover: string;
-  tag_name?: string;
-  business: "archive" | "pgc" | "article" | "article-list" | "live" | "cheese";
-  view_at: number;
   id: number;
-  cid?: string;
-  author_name: string;
-  author_mid: number;
+  business: HistoryBusiness;
+  bvid: string;
+  cid?: number | string;
+  title: string;
+  tag_name?: string;
+  cover: string;
+  view_at: number;
   uri?: string;
-  uploaded?: boolean;
+  author_name: string;
+  author_mid?: number | string;
   progress?: number;
   duration?: number;
   is_fav?: boolean;
+  timestamp?: number;
 }
 
-export interface LikedMusic {
+export type WatchEventSource = "history_cursor" | "migration" | "import";
+
+export interface WatchEvent {
+  event_id: string;
+  history_id: number;
+  business: HistoryBusiness;
   bvid: string;
+  cid?: number | string;
   title: string;
-  author: string;
-  mid: number;
-  pic: string;
-  added_at: number;
+  tag_name?: string;
+  cover: string;
+  view_at: number;
+  uri?: string;
+  author_name: string;
+  author_mid?: number | string;
+  progress?: number;
+  duration?: number;
+  is_fav?: boolean;
+  source?: WatchEventSource;
+  recorded_at?: number;
 }
 
 export interface DBConfig {
@@ -33,15 +49,7 @@ export interface DBConfig {
       keyPath: string;
       indexes: string[];
     };
-    likedMusic: {
-      keyPath: string;
-      indexes: string[];
-    };
-    favFolders: {
-      keyPath: string;
-      indexes: string[];
-    };
-    favResources: {
+    watchEvents: {
       keyPath: string;
       indexes: string[];
     };
@@ -55,42 +63,4 @@ export interface SyncResponse {
     list: HistoryItem[];
     has_more: boolean;
   };
-}
-
-export interface FavoriteFolder {
-  id: number;
-  fid: number;
-  mid: number;
-  attr: number;
-  title: string;
-  fav_state: number;
-  media_count: number;
-  index: number; // API返回的顺序
-}
-
-export interface FavoriteResource {
-  id: number; // 收藏夹内的资源ID
-  type: number;
-  title: string;
-  cover: string;
-  intro: string;
-  duration: number;
-  upper: {
-    mid: number;
-    name: string;
-    face: string;
-  };
-  cnt_info: {
-    collect: number;
-    play: number;
-    danmaku: number;
-  };
-  link: string;
-  ctime: number;
-  pubtime: number;
-  fav_time: number;
-  bv_id: string; // 有时候是 bvid
-  bvid: string;
-  folder_id: number; // 关联的收藏夹ID
-  index: number; // 在收藏夹中的顺序
 }

@@ -1,62 +1,53 @@
-import { HashRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { History } from "../../pages/History";
-import { About } from "../../pages/About";
 import { Sidebar } from "../../components/Sidebar";
 import Settings from "../../pages/Settings";
 import ScrollToTopButton from "../../components/ScrollToTopButton";
 import { Toaster } from "react-hot-toast";
-import Feedback from "../../pages/Feedback";
-import CloudSync from "../../pages/CloudSync";
-import WebDavSync from "../../pages/WebDavSync";
-import SearchMusic from "../../pages/music/SearchMusic";
-import LikedMusic from "../../pages/music/LikedMusic";
-import { Favorites } from "../../pages/Favorites";
-import Welcome from "../../pages/Welcome";
-import AISearch from "../../pages/AISearch";
-import Reward from "../../pages/Reward";
-import { UpdateNoticeModal } from "../../components/UpdateNoticeModal";
+import Analytics from "../../pages/Analytics";
 
-const MainLayout = ({ children }: { children: React.ReactNode }) => {
-  const location = useLocation();
-  const isWelcome = location.pathname === "/welcome";
+const routes = new Set(["/", "/analytics", "/settings"]);
 
-  return (
-    <div className="flex h-screen dark:bg-[#0a0a0a] dark:text-neutral-100">
-      {!isWelcome && <Sidebar />}
-      {/* 主内容区域 */}
-      <div className={`${!isWelcome ? "ml-40" : ""} w-full transition-all duration-300`}>
-        {children}
-      </div>
-      {!isWelcome && <UpdateNoticeModal />}
-    </div>
-  );
+const getCurrentPath = () => {
+  const path = window.location.hash.replace(/^#/, "") || "/";
+  return routes.has(path) ? path : "/";
 };
 
 const App = () => {
+  const [currentPath, setCurrentPath] = useState(getCurrentPath);
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      const path = getCurrentPath();
+      setCurrentPath(path);
+      if (!routes.has(window.location.hash.replace(/^#/, "") || "/")) {
+        window.history.replaceState(null, "", "#/");
+      }
+    };
+
+    handleHashChange();
+    window.addEventListener("hashchange", handleHashChange);
+    return () => window.removeEventListener("hashchange", handleHashChange);
+  }, []);
+
+  const page =
+    currentPath === "/analytics" ? (
+      <Analytics />
+    ) : currentPath === "/settings" ? (
+      <Settings />
+    ) : (
+      <History />
+    );
+
   return (
-    <HashRouter>
+    <>
       <Toaster position="top-center" />
-      <MainLayout>
-        <div>
-          <Routes>
-            <Route path="/welcome" element={<Welcome />} />
-            <Route path="/" element={<History />} />
-            <Route path="/about" element={<About />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/feedback" element={<Feedback />} />
-            <Route path="/cloud-sync" element={<CloudSync />} />
-            <Route path="/webdav-sync" element={<WebDavSync />} />
-            <Route path="/reward" element={<Reward />} />
-            <Route path="/favorites" element={<Favorites />} />
-            <Route path="/ai-search" element={<AISearch />} />
-            <Route path="/music/search" element={<SearchMusic />} />
-            <Route path="/music/liked" element={<LikedMusic />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </div>
+      <div className="flex min-h-screen dark:bg-[#0a0a0a] dark:text-neutral-100">
+        <Sidebar activePath={currentPath} />
+        <main className="ml-40 w-full transition-all duration-300">{page}</main>
         <ScrollToTopButton />
-      </MainLayout>
-    </HashRouter>
+      </div>
+    </>
   );
 };
 

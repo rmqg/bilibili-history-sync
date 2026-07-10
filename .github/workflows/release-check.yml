@@ -1,0 +1,44 @@
+name: Release check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check, build and verify all store packages
+        run: pnpm release:package
+
+      - name: Upload store packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-store-packages-${{ github.sha }}
+          path: |
+            .output/*.zip
+            .output/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14

@@ -1,34 +1,53 @@
 {
-  "name": "bilibili-unlimited-history",
-  "description": "manifest.json description",
+  "name": "bilibili-history-save-analysis",
+  "description": "保存并分析哔哩哔哩历史记录",
   "private": true,
-  "version": "1.9.8",
+  "version": "2.0.0",
+  "license": "MIT",
+  "author": "Bilibili History Plugin Contributors and derivative contributors",
+  "homepage": "https://github.com/rmqg/bilibili-history-wxt",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rmqg/bilibili-history-wxt.git"
+  },
+  "bugs": {
+    "url": "https://github.com/rmqg/bilibili-history-wxt/issues"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@11.10.0",
   "type": "module",
   "scripts": {
     "dev": "wxt --mode development",
     "dev:firefox": "wxt -b firefox",
-    "build": "wxt build",
+    "build": "wxt build -b chrome",
+    "build:chrome": "wxt build -b chrome",
+    "build:edge": "wxt build -b edge",
+    "build:safari": "wxt build -b safari",
     "build:firefox": "wxt build -b firefox",
-    "zip": "wxt --mode production zip",
-    "zip:firefox": "wxt --mode production zip -b firefox",
+    "zip": "wxt zip -b chrome",
+    "zip:chrome": "wxt zip -b chrome",
+    "zip:edge": "wxt zip -b edge",
+    "zip:safari": "wxt zip -b safari",
+    "zip:firefox": "wxt zip -b firefox --sources",
+    "package:safari": "wxt build -b safari && bash scripts/create-safari-project.sh",
+    "package:stores": "wxt zip -b chrome && wxt zip -b edge && wxt zip -b firefox --sources && wxt zip -b safari && node scripts/write-release-checksums.mjs",
+    "release:package": "corepack pnpm release:check && corepack pnpm package:stores && corepack pnpm release:verify",
+    "release:check": "tsc --noEmit && prettier --check . && wxt build -b chrome && wxt build -b edge && wxt build -b firefox && wxt build -b safari",
+    "release:verify": "node scripts/verify-release.mjs",
     "compile": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "postinstall": "wxt prepare"
   },
   "dependencies": {
-    "@types/howler": "^2.2.12",
-    "axios": "^1.9.0",
-    "date-fns": "^4.1.0",
     "dayjs": "^1.11.13",
-    "howler": "^2.2.4",
     "lucide-react": "^0.511.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-hot-toast": "^2.5.2",
-    "react-router-dom": "^7.6.0",
-    "use-debounce": "^10.0.4",
-    "zustand": "^5.0.5"
+    "use-debounce": "^10.0.4"
   },
   "devDependencies": {
     "@types/react": "^19.1.2",

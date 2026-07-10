@@ -8,11 +8,11 @@ export const getTypeTag = (business: string): string => {
     case "article-list":
       return "专栏";
     case "cheese":
-      return "课堂";
+      return "课程";
     case "pgc":
       return "番剧";
     case "archive":
-      return "视频";
+      return "普通视频";
     default:
       return "其他";
   }

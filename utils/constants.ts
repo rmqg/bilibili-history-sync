@@ -1,198 +1,23 @@
-export const IS_SYNC_DELETE = "isSyncDelete";
-export const IS_SYNC_DELETE_FROM_BILIBILI = "isSyncDeleteFromBilibili";
-
 export const IS_SYNCING = "isSyncing";
-export const IS_SYNCING_FAV = "isSyncingFav";
-
 export const HAS_FULL_SYNC = "hasFullSync";
-export const HAS_FULL_FAV_SYNC = "hasFullFavSync";
 
 export const SYNC_INTERVAL = "syncInterval";
-
 export const SYNC_TIME_REMAIN = "syncTimeRemain";
-
-export const FAV_SYNC_INTERVAL = "favSyncInterval"; // 单位：分钟，默认 60*24 (1天)
-export const FAV_SYNC_TIME_REMAIN = "favSyncTimeRemain"; // 单位：分钟
-
-export const HIDE_USER_INFO = "hideUserInfo";
-export const HIDDEN_MENUS = "hiddenMenus"; // Array of hidden titles
 export const SYNC_PROGRESS_HISTORY = "syncProgressHistory";
-export const SYNC_PROGRESS_FAV = "syncProgressFav";
+export const CLOUD_SYNC_CONFIG = "cloudSyncConfig";
+export const CLOUD_SYNC_DEVICE_ID = "cloudSyncDeviceId";
+export const CLOUD_SYNC_LAST_SYNC_AT = "cloudSyncLastSyncAt";
+
 export const DATE_SELECTION_MODE = "date_selection_mode";
+export const TIME_ZONE = "timeZone";
 export const GRID_COLUMNS = "gridColumns";
-export const LAST_SEEN_UPDATE_VERSION = "lastSeenUpdateVersion";
 
-// WebDAV 同步相关
-export const WEBDAV_CONFIG = "webdavConfig";
-export const WEBDAV_LAST_SYNC = "webdavLastSync";
-export const WEBDAV_AUTO_SYNC_ENABLED = "webdavAutoSyncEnabled";
-export const WEBDAV_AUTO_SYNC_INTERVAL = "webdavAutoSyncInterval"; // 单位：分钟，默认 30
-
-export const DASHSCOPE_API_KEY = "dashscopeApiKey";
-export const AI_SEARCH_HISTORY = "aiSearchHistory";
-
-// "light" | "dark"
 export const THEME_MODE = "themeMode";
 
 export const UPDATE_HISTORY = [
   {
-    date: "2026-05-03",
-    version: "1.9.8",
-    changes: ["增加白天/黑夜模式", "增加更新特性的弹窗", "增加赞赏入口"],
-  },
-  {
-    date: "2026-03-14",
-    version: "1.9.7",
-    changes: [
-      "新增 AI语义探索 功能，输入API Key即可模糊寻找遗忘历史记录",
-      "优化收藏夹同步机制为增量同步（按需重试机制），大幅减少API请求",
-      "新增收藏夹界面专属深度搜索栏，支持实时检索（标题、UP主、AV/BV号等）",
-      "优化标签UI：添加“已收藏”标志并重构历史徽章位置",
-    ],
-  },
-  {
-    date: "2026-03-02",
-    version: "1.9.6",
-    changes: ["新增WebDAV同步功能", "优化部分UI"],
-  },
-  {
-    date: "2026-02-26",
-    version: "1.9.5",
-    changes: ["修复搜索音乐时搜索失败的问题"],
-  },
-  {
-    date: "2026-02-23",
-    version: "1.9.4",
-    changes: [
-      "修复更新插件后历史记录丢失的问题",
-      "新增历史记录列数自定义调节功能",
-      "修复多个TypeScript类型错误",
-      "修复HMR 重载后就会复现历史记录页面无法滚动的bug",
-    ],
-  },
-  {
-    date: "2026-02-23",
-    version: "1.9.3",
-    changes: ["修复滚动加载更多却没有加载更多的bug", "历史记录的列数根据屏幕适配"],
-  },
-  {
-    date: "2026-02-14",
-    version: "1.9.2",
-    changes: [
-      "历史记录页面支持AV号搜索",
-      "新增日期选择模式（范围选择/单日点击）",
-      "修复切换筛选时无法刷新的问题",
-      "添加观看进度显示",
-      "添加搜索选项选择",
-    ],
-  },
-  {
-    date: "2026-02-05",
-    version: "1.9.1",
-    changes: [
-      "历史记录搜索支持BV号搜索",
-      "优化部分UI",
-      "新增可隐藏并禁用侧边栏功能",
-      "新增可视化同步进度条",
-    ],
-  },
-  {
-    date: "2026-02-02",
-    version: "1.9.0beta",
-    changes: [
-      "历史记录支持按类型筛选",
-      "收藏夹支持自动清理已取消收藏的内容",
-      "收藏夹支持保留已失效视频的元数据",
-      "收藏夹增加分页功能",
-      "优化UI界面",
-    ],
-  },
-  {
-    date: "2025-11-10",
-    version: "1.8.8",
-    changes: ["同步删除：插件 -> B站, 不需要打开b站标签页"],
-  },
-  {
-    date: "2025-10-22",
-    version: "1.8.7",
-    changes: ["修复播放模式的bug"],
-  },
-  {
-    date: "2025-10-21",
-    version: "1.8.6",
-    changes: ["听歌页面增加随机播放和单曲循环功能"],
-  },
-  {
-    date: "2025-10-16",
-    version: "1.8.5",
-    changes: ["修复了部分歌不能听的问题"],
-  },
-  {
-    date: "2025-09-18",
-    version: "1.8.4",
-    changes: ["修复了部分歌不能听的问题"],
-  },
-  {
-    date: "2025-09-16",
-    version: "1.8.3",
-    changes: ["修复了不能上传b站视频的bug"],
-  },
-  {
-    date: "2025-09-14",
-    version: "1.8.0",
-    changes: ["增加听歌功能，超级棒！！！"],
-  },
-  {
-    date: "2025-07-09",
-    version: "1.7.2",
-    changes: [
-      "支持在B站网页端删除历史记录时同步删除插件历史记录",
-      "修复刷新按钮不刷新总记录数的bug",
-    ],
-  },
-  {
-    date: "2025-06-28",
-    version: "1.7.1",
-    changes: ["优化云同步功能(正式启用)", "显示历史记录总数", "优化关于和反馈页面"],
-  },
-  {
-    date: "2025-06-15",
-    version: "1.7.0",
-    changes: ["增加云同步功能(测试阶段)", "pop中可选择增量同步或者全量同步", "优化菜单项"],
-  },
-  {
-    date: "2025-05-30",
-    version: "1.6.2",
-    changes: ["修复了旧版本专栏的跳转", "间隔时间可以手动输入"],
-  },
-  {
-    date: "2025-05-28",
-    version: "1.6.1",
-    changes: ["日期选择增加+、-按钮"],
-  },
-  {
-    date: "2025-05-24",
-    version: "1.6.0",
-    changes: ["代码开源", "增加设置自动同步时间间隔功能"],
-  },
-  {
-    date: "2025-05-22",
-    version: "1.5.0",
-    changes: ["修改导出功能，增加导入功能"],
-  },
-  {
-    date: "2025-05-18",
-    version: "1.4.2",
-    changes: ["修复了打开浏览器历史页面跳转到插件页面的问题"],
-  },
-  {
-    date: "2025-05-18",
-    version: "1.4.1",
-    changes: ["修复了1.4.0版本引入的视频跳转的bug"],
-  },
-  {
-    date: "2025-05-18",
-    version: "1.4.0",
-    changes: ["修复了番剧和课堂的跳转", "侧边栏添加了更新日志和反馈"],
+    date: "2026-07-10",
+    version: "2.0.0",
+    changes: ["全新定位为哔哩哔哩历史记录保存与分析工具", "新增观看分析、时区和可选云端同步"],
   },
 ] as const;

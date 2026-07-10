@@ -17,3 +17,8 @@ export async function getStorageValue<T>(key: string, defaultValue?: T): Promise
 export async function setStorageValue<T>(key: string, value: T): Promise<void> {
   await browser.storage.local.set({ [key]: value });
 }
+
+/** 删除 chrome.storage.local 中的一个值。 */
+export async function removeStorageValue(key: string): Promise<void> {
+  await browser.storage.local.remove(key);
+}

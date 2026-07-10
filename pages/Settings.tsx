@@ -1,667 +1,895 @@
-import { useState, useEffect } from "react";
-import { Check } from "lucide-react";
-import { clearHistory, saveHistory } from "../utils/db";
-import { getStorageValue, setStorageValue } from "../utils/storage";
+import { useEffect, useState } from "react";
+import type { ChangeEvent } from "react";
 import {
-  IS_SYNC_DELETE,
-  SYNC_INTERVAL,
-  IS_SYNC_DELETE_FROM_BILIBILI,
-  FAV_SYNC_INTERVAL,
-  HIDE_USER_INFO,
-  HIDDEN_MENUS,
-  SYNC_PROGRESS_HISTORY,
-  SYNC_PROGRESS_FAV,
+  Cloud,
+  CloudOff,
+  Clock,
+  Download,
+  Globe2,
+  RefreshCw,
+  Save,
+  Trash2,
+  Upload,
+} from "lucide-react";
+import toast from "react-hot-toast";
+import {
+  CloudSyncClient,
+  CloudSyncConfig,
+  requestCloudSyncDataConsent,
+  runCloudSync,
+} from "../utils/cloudSync";
+import { buildWatchEventId, saveHistory, saveWatchEvents } from "../utils/db";
+import { exportHistoryToCSV, exportHistoryToJSON } from "../utils/export";
+import { getStorageValue, removeStorageValue, setStorageValue } from "../utils/storage";
+import { HistoryItem, WatchEvent } from "../utils/types";
+import {
+  CLOUD_SYNC_CONFIG,
+  CLOUD_SYNC_DEVICE_ID,
+  CLOUD_SYNC_LAST_SYNC_AT,
   DATE_SELECTION_MODE,
+  SYNC_INTERVAL,
+  SYNC_PROGRESS_HISTORY,
+  TIME_ZONE,
 } from "../utils/constants";
 import {
-  exportHistoryToCSV,
-  exportHistoryToJSON,
-  exportLikedMusicToJSON,
-  exportLikedMusicToCSV,
-} from "../utils/export";
-import toast from "react-hot-toast";
-import { HistoryItem, LikedMusic } from "../utils/types";
-import { importLikedMusic } from "../utils/db";
-import { Checkbox } from "../components/Checkbox";
-import { Select } from "../components/Select";
+  formatDateTime,
+  getSystemTimeZone,
+  TIME_ZONE_OPTIONS,
+  TimeZonePreference,
+} from "../utils/timezone";
+
+type SyncProgress = {
+  current: number;
+  message: string;
+};
+
+type HistoryBackup = {
+  history: unknown[];
+  watchEvents?: unknown[];
+};
+
+const cloudflareWorkerCode = `export default {
+  async fetch(request, env) {
+    const cors = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, PUT, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers": "Authorization, Content-Type",
+      "Content-Type": "application/json; charset=utf-8",
+    };
+
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: cors });
+    }
+
+    const auth = request.headers.get("Authorization") || "";
+    if (auth !== \`Bearer \${env.SYNC_TOKEN}\`) {
+      return new Response(JSON.stringify({ error: "unauthorized" }), {
+        status: 401,
+        headers: cors,
+      });
+    }
+
+    if (request.method === "GET") {
+      const value = await env.BILI_HISTORY_SYNC.get("history.json");
+      return new Response(value || JSON.stringify({ empty: true }), { headers: cors });
+    }
+
+    if (request.method === "PUT") {
+      const body = await request.text();
+      await env.BILI_HISTORY_SYNC.put("history.json", body);
+      return new Response(JSON.stringify({ ok: true }), { headers: cors });
+    }
+
+    if (request.method === "DELETE") {
+      await env.BILI_HISTORY_SYNC.delete("history.json");
+      return new Response(JSON.stringify({ ok: true }), { headers: cors });
+    }
+
+    return new Response(JSON.stringify({ error: "method not allowed" }), {
+      status: 405,
+      headers: cors,
+    });
+  },
+};`;
+
+const sectionClass =
+  "w-full max-w-2xl rounded-lg bg-white dark:bg-neutral-900 border border-gray-200 dark:border-neutral-800 shadow-sm";
+
+const isHistoryRecord = (value: unknown): value is HistoryItem => {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<HistoryItem>;
+  return (
+    Number.isFinite(Number(record.id)) &&
+    Number.isFinite(Number(record.view_at)) &&
+    typeof record.title === "string"
+  );
+};
+
+const normalizeHistoryRecord = (item: HistoryItem): HistoryItem => ({
+  ...item,
+  id: Number(item.id),
+  view_at: Number(item.view_at),
+  business: item.business || "archive",
+  bvid: item.bvid || "",
+  cover: item.cover || "",
+  author_name: item.author_name || "",
+  timestamp: item.timestamp || Date.now(),
+});
+
+const isWatchEventRecord = (value: unknown): value is WatchEvent => {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<WatchEvent>;
+  return (
+    Number.isFinite(Number(record.history_id)) &&
+    Number.isFinite(Number(record.view_at)) &&
+    typeof record.title === "string"
+  );
+};
+
+const isHistoryBackup = (value: unknown): value is HistoryBackup => {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    Array.isArray((value as Partial<HistoryBackup>).history) &&
+    ((value as Partial<HistoryBackup>).watchEvents === undefined ||
+      Array.isArray((value as Partial<HistoryBackup>).watchEvents))
+  );
+};
+
+const normalizeWatchEventRecord = (item: WatchEvent): WatchEvent => {
+  const historyId = Number(item.history_id);
+  const viewAt = Number(item.view_at);
+  const business = item.business || "archive";
+  const source =
+    item.source === "history_cursor" || item.source === "migration" ? item.source : "import";
+
+  return {
+    ...item,
+    event_id: item.event_id || buildWatchEventId(business, historyId, viewAt),
+    history_id: historyId,
+    view_at: viewAt,
+    business,
+    bvid: item.bvid || "",
+    cover: item.cover || "",
+    author_name: item.author_name || "",
+    source,
+    recorded_at: item.recorded_at || Date.now(),
+  };
+};
+
+const getOrCreateDeviceId = async () => {
+  const storedDeviceId = await getStorageValue<string>(CLOUD_SYNC_DEVICE_ID, "");
+  if (storedDeviceId) return storedDeviceId;
+
+  const nextDeviceId =
+    typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  await setStorageValue(CLOUD_SYNC_DEVICE_ID, nextDeviceId);
+  return nextDeviceId;
+};
 
 const Settings = () => {
-  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
-  const [isSyncDelete, setIsSyncDelete] = useState(true);
-  const [isSyncDeleteFromBilibili, setIsSyncDeleteFromBilibili] = useState(true);
-  const [isHideUserInfo, setIsHideUserInfo] = useState(false);
-  const [hiddenMenus, setHiddenMenus] = useState<string[]>([]);
+  const [syncInterval, setSyncInterval] = useState<number | string>(1);
   const [dateSelectionMode, setDateSelectionMode] = useState<"range" | "single">("range");
+  const [timeZone, setTimeZone] = useState<TimeZonePreference>("system");
+  const [historyProgress, setHistoryProgress] = useState<SyncProgress | null>(null);
 
-  // separate progress states
-  const [historyProgress, setHistoryProgress] = useState<{
-    current: number;
-    message: string;
-  } | null>(null);
-  const [favProgress, setFavProgress] = useState<{
-    current: number;
-    total: number;
-    message: string;
-  } | null>(null);
-
-  const [showResetResultDialog, setShowResetResultDialog] = useState(false);
-  const [resetResult, setResetResult] = useState("");
-  const [isResetLoading, setIsResetLoading] = useState(false);
-  const [resetStatus, setResetStatus] = useState("");
-
+  const [exportFormat, setExportFormat] = useState<"json" | "csv">("json");
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-
-  const [exportSource, setExportSource] = useState<"history" | "music">("history");
-  const [exportFormat, setExportFormat] = useState<"csv" | "json">("json");
-
-  const [syncInterval, setSyncInterval] = useState<number | string>(1);
-  const [favSyncInterval, setFavSyncInterval] = useState<number | string>(15);
+  const [cloudEndpoint, setCloudEndpoint] = useState("");
+  const [cloudToken, setCloudToken] = useState("");
+  const [lastCloudSyncAt, setLastCloudSyncAt] = useState("");
+  const [isSavingCloudConfig, setIsSavingCloudConfig] = useState(false);
+  const [isTestingCloud, setIsTestingCloud] = useState(false);
+  const [isCloudSyncing, setIsCloudSyncing] = useState(false);
+  const [isDeletingCloud, setIsDeletingCloud] = useState(false);
 
   useEffect(() => {
-    // 加载设置
     const loadSettings = async () => {
-      const syncDelete = await getStorageValue(IS_SYNC_DELETE, true);
-      const syncDeleteFromBilibili = await getStorageValue(IS_SYNC_DELETE_FROM_BILIBILI, true);
-      const hideUserInfo = await getStorageValue(HIDE_USER_INFO, false);
-      const menus = await getStorageValue(HIDDEN_MENUS, []);
-      const storedSyncInterval = await getStorageValue(SYNC_INTERVAL, 1);
-      const storedFavSyncInterval = await getStorageValue(FAV_SYNC_INTERVAL, 15);
-      const storedDateMode = await getStorageValue(DATE_SELECTION_MODE, "range");
+      const [
+        storedSyncInterval,
+        storedDateMode,
+        storedTimeZone,
+        progress,
+        cloudConfig,
+        cloudSyncAt,
+      ] = await Promise.all([
+        getStorageValue(SYNC_INTERVAL, 1),
+        getStorageValue(DATE_SELECTION_MODE, "range"),
+        getStorageValue<TimeZonePreference>(TIME_ZONE, "system"),
+        getStorageValue<SyncProgress | null>(SYNC_PROGRESS_HISTORY, null),
+        getStorageValue<CloudSyncConfig | null>(CLOUD_SYNC_CONFIG, null),
+        getStorageValue<string>(CLOUD_SYNC_LAST_SYNC_AT, ""),
+      ]);
 
-      const histProg = await getStorageValue(SYNC_PROGRESS_HISTORY, null);
-      const favProg = await getStorageValue(SYNC_PROGRESS_FAV, null);
-
-      setIsSyncDelete(syncDelete);
-      setIsSyncDeleteFromBilibili(syncDeleteFromBilibili);
-      setIsHideUserInfo(hideUserInfo);
-      setHiddenMenus(menus);
       setSyncInterval(storedSyncInterval);
-      setFavSyncInterval(storedFavSyncInterval);
-      setDateSelectionMode(storedDateMode as "range" | "single");
-
-      setHistoryProgress(histProg);
-      setFavProgress(favProg);
+      setDateSelectionMode(storedDateMode === "single" ? "single" : "range");
+      setTimeZone(storedTimeZone || "system");
+      setHistoryProgress(progress);
+      setCloudEndpoint(cloudConfig?.endpoint || "");
+      setCloudToken(cloudConfig?.token || "");
+      setLastCloudSyncAt(cloudSyncAt || "");
     };
+
     loadSettings();
 
-    // 监听 storage 变化
     const handleStorageChange = (
       changes: { [key: string]: Browser.storage.StorageChange },
       areaName: string,
     ) => {
-      if (areaName === "local") {
-        if (changes[SYNC_PROGRESS_HISTORY]) {
-          setHistoryProgress(
-            changes[SYNC_PROGRESS_HISTORY].newValue as { current: number; message: string } | null,
-          );
-        }
-        if (changes[SYNC_PROGRESS_FAV]) {
-          setFavProgress(
-            changes[SYNC_PROGRESS_FAV].newValue as {
-              current: number;
-              total: number;
-              message: string;
-            } | null,
-          );
-        }
-      }
+      if (areaName !== "local" || !changes[SYNC_PROGRESS_HISTORY]) return;
+      setHistoryProgress(changes[SYNC_PROGRESS_HISTORY].newValue as SyncProgress | null);
     };
 
     browser.storage.onChanged.addListener(handleStorageChange);
-    return () => {
-      browser.storage.onChanged.removeListener(handleStorageChange);
-    };
+    return () => browser.storage.onChanged.removeListener(handleStorageChange);
   }, []);
 
-  const handleSyncDeleteChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newValue = e.target.checked;
-    setIsSyncDelete(newValue);
-    await setStorageValue(IS_SYNC_DELETE, newValue);
-  };
+  const handleSyncIntervalChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const value = event.target.value;
+    setSyncInterval(value);
 
-  const handleSyncDeleteFromBilibiliChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newValue = e.target.checked;
-    setIsSyncDeleteFromBilibili(newValue);
-    await setStorageValue(IS_SYNC_DELETE_FROM_BILIBILI, newValue);
-  };
-
-  const handleHideUserInfoChange = async (checked: boolean) => {
-    setIsHideUserInfo(checked);
-    await setStorageValue(HIDE_USER_INFO, checked);
-  };
-
-  const toggleHiddenMenu = async (title: string, checked: boolean) => {
-    let newMenus;
-    if (!checked) {
-      // if unchecked, remove from hidden (show it)
-      // logic: hiddenMenus contains items to HIDE.
-      // Checkbox "Hide XXX". Checked = Included in hiddenMenus.
-      // So if checkbox says "Hide Favorites" is checked, we add to list.
-      // Wait, toggleHiddenMenu logic was:
-      // if includes -> remove. else -> add.
-      // Checkbox onChange gives NEW checked state.
-      // If checked=true (user wants to Hide), we Add to list.
-      // If checked=false (user wants to Show), we Remove from list.
-      newMenus = hiddenMenus.filter((t) => t !== title);
-    } else {
-      newMenus = [...hiddenMenus, title];
-    }
-    // Correct logic re-check:
-    // If we receive `checked` as true, it means "Hide this menu". So title should be in hiddenMenus.
-    if (checked) {
-      if (!hiddenMenus.includes(title)) newMenus = [...hiddenMenus, title];
-      else newMenus = hiddenMenus;
-    } else {
-      newMenus = hiddenMenus.filter((t) => t !== title);
-    }
-
-    setHiddenMenus(newMenus);
-    await setStorageValue(HIDDEN_MENUS, newMenus);
-  };
-
-  const handleSyncIntervalChange = async (val: string | number) => {
-    setSyncInterval(val);
-    const num = Number(val);
-    if (!isNaN(num) && num >= 1) {
-      await setStorageValue(SYNC_INTERVAL, num);
-    }
-  };
-
-  const handleFavSyncIntervalChange = async (val: string | number) => {
-    setFavSyncInterval(val);
-    const num = Number(val);
-    if (!isNaN(num) && num >= 1) {
-      await setStorageValue(FAV_SYNC_INTERVAL, num);
-    }
-  };
-
-  const handleReset = async () => {
-    try {
-      setIsResetLoading(true);
-      setResetStatus("正在清空历史记录...");
-      await clearHistory();
-      setResetStatus("正在清理存储...");
-      await browser.storage.local.clear();
-      setResetStatus("正在重新加载...");
-      setResetResult("恢复出厂设置成功！");
-    } catch (error) {
-      console.error("恢复出厂设置失败:", error);
-      setResetResult("恢复出厂设置失败，请重试！");
-    } finally {
-      setIsResetLoading(false);
-      setResetStatus("");
-      setShowResetResultDialog(true);
-      setShowConfirmDialog(false);
+    const minutes = Number(value);
+    if (Number.isFinite(minutes) && minutes >= 1) {
+      await setStorageValue(SYNC_INTERVAL, minutes);
     }
   };
 
   const handleExport = async () => {
     try {
       setIsExporting(true);
-      if (exportSource === "history") {
-        if (exportFormat === "csv") {
-          await exportHistoryToCSV();
-          toast.success("历史记录(CSV)导出成功！");
-        } else {
-          await exportHistoryToJSON();
-          toast.success("历史记录(JSON)导出成功！");
-        }
+      if (exportFormat === "csv") {
+        await exportHistoryToCSV();
+        toast.success("表格文件已导出");
       } else {
-        // Music
-        if (exportFormat === "csv") {
-          await exportLikedMusicToCSV();
-          toast.success("音乐(CSV)导出成功！");
-        } else {
-          await exportLikedMusicToJSON();
-          toast.success("音乐(JSON)导出成功！");
-        }
+        await exportHistoryToJSON();
+        toast.success("备份文件已导出");
       }
     } catch (error) {
-      console.error(`导出失败:`, error);
-      toast.error(`导出失败，请重试！`);
+      console.error("导出历史记录失败:", error);
+      toast.error("导出失败，请稍后再试");
     } finally {
       setIsExporting(false);
     }
   };
 
-  const handleImport = async () => {
-    if (exportFormat === "csv") {
-      toast.error("暂不支持导入CSV格式数据");
-      return;
-    }
+  const getCloudConfigFromInput = (): CloudSyncConfig => ({
+    endpoint: cloudEndpoint.trim(),
+    token: cloudToken.trim(),
+  });
 
+  const handleSaveCloudConfig = async () => {
     try {
-      setIsImporting(true);
-      const fileInput = document.createElement("input");
-      fileInput.type = "file";
-      fileInput.accept = ".json";
-
-      fileInput.onchange = async (event) => {
-        const file = (event.target as HTMLInputElement).files?.[0];
-        if (file) {
-          const reader = new FileReader();
-          reader.onload = async (e) => {
-            try {
-              const jsonContent = e.target?.result as string;
-
-              if (exportSource === "history") {
-                const items = JSON.parse(jsonContent) as HistoryItem[];
-                if (!Array.isArray(items) || items.some((item) => typeof item.id === "undefined")) {
-                  toast.error("文件格式错误，请确保是历史记录JSON");
-                  return;
-                }
-                await saveHistory(items);
-                toast.success("历史记录导入成功！");
-              } else {
-                // Music
-                const items = JSON.parse(jsonContent) as LikedMusic[];
-                if (
-                  !Array.isArray(items) ||
-                  items.some((item) => typeof item.bvid === "undefined")
-                ) {
-                  toast.error("文件格式错误，请确保是音乐JSON");
-                  return;
-                }
-                await importLikedMusic(items);
-                toast.success("音乐导入成功！");
-              }
-            } catch (parseError) {
-              console.error("解析文件失败:", parseError);
-              toast.error("导入失败，文件内容错误");
-            } finally {
-              setIsImporting(false);
-            }
-          };
-          reader.readAsText(file);
-        } else {
-          setIsImporting(false);
-        }
-      };
-
-      fileInput.click();
+      setIsSavingCloudConfig(true);
+      const config = getCloudConfigFromInput();
+      if (!config.endpoint || !config.token) {
+        toast.error("请先填写云端地址和同步密钥");
+        return;
+      }
+      await setStorageValue(CLOUD_SYNC_CONFIG, config);
+      toast.success("云端同步设置已保存");
     } catch (error) {
-      console.error(`导入失败:`, error);
-      toast.error("导入失败，请重试。");
+      console.error("保存云端同步设置失败:", error);
+      toast.error("保存失败，请稍后再试");
     } finally {
-      setIsImporting(false);
+      setIsSavingCloudConfig(false);
     }
   };
 
+  const handleTestCloud = async () => {
+    try {
+      setIsTestingCloud(true);
+      const config = getCloudConfigFromInput();
+      await requestCloudSyncDataConsent();
+      await new CloudSyncClient(config).ping();
+      await setStorageValue(CLOUD_SYNC_CONFIG, config);
+      toast.success("云端连接正常");
+    } catch (error) {
+      console.error("测试云端连接失败:", error);
+      toast.error(error instanceof Error ? error.message : "连接失败，请检查地址和密钥");
+    } finally {
+      setIsTestingCloud(false);
+    }
+  };
+
+  const handleCloudSync = async () => {
+    try {
+      setIsCloudSyncing(true);
+      const config = getCloudConfigFromInput();
+      await requestCloudSyncDataConsent();
+      await setStorageValue(CLOUD_SYNC_CONFIG, config);
+
+      const deviceId = await getOrCreateDeviceId();
+      const result = await runCloudSync(config, deviceId);
+      const syncedAt = new Date().toISOString();
+      await setStorageValue(CLOUD_SYNC_LAST_SYNC_AT, syncedAt);
+      setLastCloudSyncAt(syncedAt);
+
+      toast.success(
+        `同步完成：本机 ${result.localHistoryCount} 条，云端 ${result.remoteHistoryCount} 条，合并后 ${result.mergedHistoryCount} 条`,
+      );
+    } catch (error) {
+      console.error("云端同步失败:", error);
+      toast.error(error instanceof Error ? error.message : "同步失败，请稍后再试");
+    } finally {
+      setIsCloudSyncing(false);
+    }
+  };
+
+  const clearLocalCloudConfig = async () => {
+    await Promise.all([
+      removeStorageValue(CLOUD_SYNC_CONFIG),
+      removeStorageValue(CLOUD_SYNC_DEVICE_ID),
+      removeStorageValue(CLOUD_SYNC_LAST_SYNC_AT),
+    ]);
+    setCloudEndpoint("");
+    setCloudToken("");
+    setLastCloudSyncAt("");
+  };
+
+  const handleDisableCloudSync = async () => {
+    await clearLocalCloudConfig();
+    toast.success("已停用云端同步，并清除这台浏览器保存的地址和密钥");
+  };
+
+  const handleDeleteCloudData = async () => {
+    const confirmed = window.confirm(
+      "确定删除云端保存的 history.json 吗？本机历史记录不会被删除，此操作无法撤销。",
+    );
+    if (!confirmed) return;
+
+    try {
+      setIsDeletingCloud(true);
+      const config = getCloudConfigFromInput();
+      await requestCloudSyncDataConsent();
+      await new CloudSyncClient(config).deleteRemoteData();
+      await clearLocalCloudConfig();
+      toast.success("云端记录已删除，云端同步也已停用");
+    } catch (error) {
+      console.error("删除云端记录失败:", error);
+      toast.error(error instanceof Error ? error.message : "删除失败，请稍后再试");
+    } finally {
+      setIsDeletingCloud(false);
+    }
+  };
+
+  const handleImport = async () => {
+    setIsImporting(true);
+
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = ".json,application/json";
+
+    fileInput.onchange = async (event) => {
+      const file = (event.target as HTMLInputElement).files?.[0];
+      if (!file) {
+        setIsImporting(false);
+        return;
+      }
+
+      try {
+        const content = await file.text();
+        const data = JSON.parse(content);
+        const historyData = Array.isArray(data)
+          ? data
+          : isHistoryBackup(data)
+            ? data.history
+            : null;
+        const watchEventData =
+          !Array.isArray(data) && isHistoryBackup(data) ? data.watchEvents || [] : [];
+        const historyRecords = historyData?.filter(isHistoryRecord) || [];
+        const watchEventRecords = watchEventData.filter(isWatchEventRecord);
+
+        if (
+          !historyData ||
+          historyRecords.length !== historyData.length ||
+          watchEventRecords.length !== watchEventData.length
+        ) {
+          toast.error("这个文件不能恢复，请选择这个扩展导出的备份文件");
+          return;
+        }
+
+        await saveHistory(historyRecords.map(normalizeHistoryRecord));
+        await saveWatchEvents(watchEventRecords.map(normalizeWatchEventRecord));
+        toast.success(`已恢复 ${historyData.length} 条记录`);
+      } catch (error) {
+        console.error("导入历史记录失败:", error);
+        toast.error("恢复失败，请确认选择的是这个扩展导出的备份文件");
+      } finally {
+        setIsImporting(false);
+      }
+    };
+
+    fileInput.click();
+  };
+
   return (
-    <div className="p-4 flex flex-col container mx-auto items-center pb-20 min-h-screen bg-gray-50/30 dark:bg-[#0a0a0a] text-gray-900 dark:text-neutral-100">
-      {/* 恢复出厂设置 */}
-      <div className="w-full max-w-md mb-8 rounded-lg bg-gray-50 dark:bg-neutral-900 hover:bg-gray-100 dark:hover:bg-neutral-800 border border-transparent dark:border-neutral-800 hover:border-gray-200 dark:hover:border-neutral-700 transition-all duration-300 ease-in-out">
-        <div className="flex items-center justify-between p-4 ">
-          <div>
-            <h3 className="text-lg font-medium text-gray-800 dark:text-neutral-100">
-              恢复出厂设置
-            </h3>
-            <p className="text-sm text-gray-400 dark:text-neutral-500">清空所有数据，无法恢复</p>
-          </div>
-          <button
-            onClick={() => setShowConfirmDialog(true)}
-            className="px-4 py-2 text-sm text-red-600 dark:text-red-300 bg-red-50 dark:bg-red-500/10 hover:bg-red-100 dark:hover:bg-red-500/20 border border-red-200 dark:border-red-500/20 rounded-lg transition-colors disabled:opacity-50"
-            disabled={isResetLoading}
-          >
-            恢复出厂
-          </button>
-        </div>
-      </div>
+    <div className="min-h-screen bg-gray-50/50 dark:bg-[#0a0a0a] text-gray-900 dark:text-neutral-100 px-6 py-8 pb-20">
+      <div className="mx-auto flex max-w-4xl flex-col gap-5">
+        <header>
+          <h1 className="text-2xl font-semibold tracking-normal">设置</h1>
+          <p className="mt-1 text-sm text-gray-500 dark:text-neutral-400">
+            管理历史记录的自动保存、时区、日期筛选、备份和云端同步。默认只保存在这台电脑；只有主动使用云端同步时才会上传到你配置的云端。
+          </p>
+        </header>
 
-      {/* 历史记录同同进度显示 */}
-      {historyProgress && historyProgress.message && (
-        <div className="w-full max-w-md mb-4 p-4 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-lg animate-in fade-in duration-300">
-          <div>
-            <div className="flex justify-between items-center mb-1">
-              <span className="font-medium text-blue-800 dark:text-blue-300">历史记录同步中</span>
-              <span className="text-xs text-blue-600 dark:text-blue-300 font-mono">
-                {historyProgress.current > 0 ? `${historyProgress.current} 条` : ""}
-              </span>
-            </div>
-            <p className="text-sm text-blue-600 dark:text-blue-300">{historyProgress.message}</p>
-          </div>
-        </div>
-      )}
-
-      {/* 收藏夹同步进度显示 */}
-      {favProgress && favProgress.message && (
-        <div className="w-full max-w-md mb-8 p-4 bg-purple-50 dark:bg-purple-500/10 border border-purple-200 dark:border-purple-500/20 rounded-lg animate-in fade-in duration-300">
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <span className="font-medium text-purple-800 dark:text-purple-300">收藏夹同步中</span>
-              <span className="text-xs text-purple-600 dark:text-purple-300 font-bold">
-                {favProgress.total > 0
-                  ? `${favProgress.current} / ${favProgress.total}`
-                  : `${favProgress.current}`}
-              </span>
-            </div>
-            {favProgress.total > 0 && (
-              <div className="w-full bg-purple-200 dark:bg-purple-500/20 rounded-full h-2 mb-2">
-                <div
-                  className="bg-purple-600 h-2 rounded-full transition-all duration-300 ease-out"
-                  style={{
-                    width: `${Math.min(100, (favProgress.current / favProgress.total) * 100)}%`,
-                  }}
-                ></div>
+        {historyProgress?.message && (
+          <section className="w-full max-w-2xl rounded-lg border border-blue-200 bg-blue-50 p-4 dark:border-blue-500/20 dark:bg-blue-500/10">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium text-blue-800 dark:text-blue-300">保存进度</p>
+                <p className="mt-1 text-sm text-blue-700 dark:text-blue-300">
+                  {historyProgress.message}
+                </p>
               </div>
-            )}
-            <p
-              className="text-sm text-purple-600 dark:text-purple-300 truncate"
-              title={favProgress.message}
-            >
-              {favProgress.message}
+              {historyProgress.current > 0 && (
+                <span className="shrink-0 font-mono text-xs text-blue-700 dark:text-blue-300">
+                  {historyProgress.current} 条
+                </span>
+              )}
+            </div>
+          </section>
+        )}
+
+        <section className={sectionClass}>
+          <div className="border-b border-gray-200 p-5 dark:border-neutral-800">
+            <h2 className="text-base font-semibold">自动保存历史记录</h2>
+            <p className="mt-1 text-sm text-gray-500 dark:text-neutral-400">
+              扩展会定时检查哔哩哔哩有没有新的历史记录，并保存到这台电脑。它不会删除或修改你账号里的记录。
             </p>
           </div>
-        </div>
-      )}
 
-      {/* 侧边栏菜单管理 */}
-      <div className="w-full max-w-md mb-8 rounded-xl bg-gray-50 dark:bg-neutral-900 shadow-sm border border-gray-100 dark:border-neutral-800">
-        <div className="p-5">
-          <h3 className="text-lg font-bold text-gray-800 dark:text-neutral-100 mb-1">
-            侧边栏菜单管理
-          </h3>
-          <p className="text-sm text-gray-500 dark:text-neutral-400 mb-6">
-            选择需要隐藏并禁用的菜单项
-          </p>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-3">
-            <Checkbox
-              label="隐藏用户信息"
-              checked={isHideUserInfo}
-              onChange={handleHideUserInfoChange}
-            />
-
-            {["收藏夹", "听歌", "云同步", "WebDAV", "关于", "反馈"].map((title) => (
-              <Checkbox
-                key={title}
-                label={`隐藏${title}`}
-                checked={hiddenMenus.includes(title)}
-                onChange={(checked) => toggleHiddenMenu(title, checked)}
-              />
-            ))}
+          <div className="flex flex-col gap-5 p-5">
+            <label className="flex items-center justify-between gap-4">
+              <span>
+                <span className="block text-sm font-medium">每隔几分钟检查一次</span>
+                <span className="block text-xs text-gray-500 dark:text-neutral-400">
+                  例如填 30，表示每 30 分钟检查一次。想立刻保存，可以点浏览器工具栏里的扩展图标。
+                </span>
+              </span>
+              <span className="flex items-center gap-2">
+                <Clock className="h-4 w-4 text-gray-400 dark:text-neutral-500" />
+                <input
+                  type="number"
+                  min="1"
+                  value={syncInterval}
+                  onChange={handleSyncIntervalChange}
+                  className="w-24 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-950"
+                />
+              </span>
+            </label>
           </div>
-        </div>
-      </div>
+        </section>
 
-      {/* 界面管理 */}
-      <div className="w-full max-w-md mb-8 rounded-xl bg-gray-50 dark:bg-neutral-900 shadow-sm border border-gray-100 dark:border-neutral-800">
-        <div className="p-5">
-          <h3 className="text-lg font-bold text-gray-800 dark:text-neutral-100 mb-1">界面管理</h3>
-          <p className="text-sm text-gray-500 dark:text-neutral-400 mb-6">自定义界面显示与交互</p>
-
-          <div className="flex flex-col gap-4">
-            <div>
-              <label className="text-sm font-medium text-gray-700 dark:text-neutral-300 block mb-3">
-                日期选择方式
-              </label>
-              <div className="flex gap-6">
-                <label className="flex items-center gap-2 cursor-pointer group">
-                  <input
-                    type="radio"
-                    name="dateSelectionMode"
-                    value="range"
-                    checked={dateSelectionMode === "range"}
-                    onChange={async () => {
-                      setDateSelectionMode("range");
-                      await setStorageValue(DATE_SELECTION_MODE, "range");
-                    }}
-                    className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-neutral-700 transition-all cursor-pointer"
-                  />
-                  <span className="text-sm text-gray-600 dark:text-neutral-300 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                    范围选择 (起始 - 结束)
-                  </span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer group">
-                  <input
-                    type="radio"
-                    name="dateSelectionMode"
-                    value="single"
-                    checked={dateSelectionMode === "single"}
-                    onChange={async () => {
-                      setDateSelectionMode("single");
-                      await setStorageValue(DATE_SELECTION_MODE, "single");
-                    }}
-                    className="w-4 h-4 text-blue-600 focus:ring-blue-500 border-gray-300 dark:border-neutral-700 transition-all cursor-pointer"
-                  />
-                  <span className="text-sm text-gray-600 dark:text-neutral-300 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                    单日选择 (点选日期)
-                  </span>
-                </label>
+        <section className={sectionClass}>
+          <div className="border-b border-gray-200 p-5 dark:border-neutral-800">
+            <div className="flex items-start gap-3">
+              <Globe2 className="mt-0.5 h-5 w-5 text-blue-600 dark:text-blue-400" />
+              <div>
+                <h2 className="text-base font-semibold">日期和时区</h2>
+                <p className="mt-1 text-sm text-gray-500 dark:text-neutral-400">
+                  决定一条记录算在哪一天，也会影响记录时间、逐日分析和导出的观看时间。
+                </p>
               </div>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* 数据管理 */}
-      <div className="w-full max-w-md mb-8 rounded-xl bg-gray-50 dark:bg-neutral-900 shadow-sm border border-gray-100 dark:border-neutral-800">
-        <div className="p-5">
-          <h3 className="text-lg font-bold text-gray-800 dark:text-neutral-100 mb-6">数据管理</h3>
-
-          <div className="flex flex-col gap-5">
-            <div className="flex flex-col sm:flex-row gap-4">
-              {/* 数据源选择 */}
-              <div className="flex-1">
-                <Select
-                  label="导出内容"
-                  value={exportSource}
-                  onChange={(val) => setExportSource(val as "history" | "music")}
-                  options={[
-                    { value: "history", label: "历史记录" },
-                    { value: "music", label: "我喜欢的音乐" },
-                  ]}
-                />
-              </div>
-
-              {/* 格式选择 */}
-              <div className="flex-1">
-                <Select
-                  label="导出格式"
-                  value={exportFormat}
-                  onChange={(val) => setExportFormat(val as "csv" | "json")}
-                  options={[
-                    { value: "json", label: "JSON" },
-                    { value: "csv", label: "CSV" },
-                  ]}
-                />
-              </div>
-            </div>
-
-            <div className="flex gap-3 justify-end pt-2">
-              <button
-                onClick={handleImport}
-                disabled={isImporting || exportFormat === "csv"}
-                className="px-5 py-2.5 text-sm font-medium bg-white dark:bg-neutral-900 text-gray-700 dark:text-neutral-300 border border-gray-300 dark:border-neutral-700 rounded-lg hover:bg-gray-50 dark:hover:bg-neutral-800 transition-all hover:shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                title={exportFormat === "csv" ? "CSV格式不支持导入" : "导入所选内容的JSON文件"}
+          <div className="flex flex-col gap-3 p-5">
+            <label className="flex items-center justify-between gap-4">
+              <span>
+                <span className="block text-sm font-medium">使用的时区</span>
+                <span className="block text-xs text-gray-500 dark:text-neutral-400">
+                  当前设备时区：{getSystemTimeZone()}
+                  。在中美两地切换时，可以固定为其中一个时区，避免同一条记录跑到前一天或后一天。
+                </span>
+              </span>
+              <select
+                value={timeZone}
+                onChange={async (event) => {
+                  const nextTimeZone = event.target.value;
+                  setTimeZone(nextTimeZone);
+                  await setStorageValue(TIME_ZONE, nextTimeZone);
+                  toast.success("时区已更新");
+                }}
+                className="max-w-64 rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-950"
               >
-                {isImporting ? "导入中..." : "导入 (JSON)"}
+                {TIME_ZONE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section className={sectionClass}>
+          <div className="border-b border-gray-200 p-5 dark:border-neutral-800">
+            <h2 className="text-base font-semibold">日期筛选方式</h2>
+            <p className="mt-1 text-sm text-gray-500 dark:text-neutral-400">
+              在记录列表里选择日期时，可以只看某一天，也可以选择一段时间。这里只影响本机页面，不会改动
+              哔哩哔哩账号。
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-3 p-5">
+            <label className="flex items-center gap-3">
+              <input
+                type="radio"
+                name="dateSelectionMode"
+                checked={dateSelectionMode === "range"}
+                onChange={async () => {
+                  setDateSelectionMode("range");
+                  await setStorageValue(DATE_SELECTION_MODE, "range");
+                }}
+                className="h-4 w-4 border-gray-300 text-blue-600"
+              />
+              <span>
+                <span className="block text-sm">选择一段时间</span>
+                <span className="block text-xs text-gray-500 dark:text-neutral-400">
+                  先选开始日期，再选结束日期，只显示这段时间内的记录。
+                </span>
+              </span>
+            </label>
+            <label className="flex items-center gap-3">
+              <input
+                type="radio"
+                name="dateSelectionMode"
+                checked={dateSelectionMode === "single"}
+                onChange={async () => {
+                  setDateSelectionMode("single");
+                  await setStorageValue(DATE_SELECTION_MODE, "single");
+                }}
+                className="h-4 w-4 border-gray-300 text-blue-600"
+              />
+              <span>
+                <span className="block text-sm">只看选中的那一天</span>
+                <span className="block text-xs text-gray-500 dark:text-neutral-400">
+                  选哪一天，就只显示那一天的记录。
+                </span>
+              </span>
+            </label>
+          </div>
+        </section>
+
+        <section className={sectionClass}>
+          <div className="border-b border-gray-200 p-5 dark:border-neutral-800">
+            <h2 className="text-base font-semibold">备份和导出</h2>
+            <p className="mt-1 text-sm text-gray-500 dark:text-neutral-400">
+              备份文件以后可以恢复到浏览器里；表格文件适合用 Excel、Numbers
+              或数据分析工具打开。恢复备份只会把记录加到这台电脑，不会上传或改动哔哩哔哩账号。
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-5 p-5">
+            <label className="flex items-center justify-between gap-4">
+              <span className="text-sm font-medium">导出哪种文件</span>
+              <select
+                value={exportFormat}
+                onChange={(event) => setExportFormat(event.target.value as "json" | "csv")}
+                className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-950"
+              >
+                <option value="json">备份文件（以后可恢复）</option>
+                <option value="csv">表格文件（用于查看或分析）</option>
+              </select>
+            </label>
+
+            <div className="flex flex-wrap justify-end gap-3">
+              <button
+                type="button"
+                onClick={handleImport}
+                disabled={isImporting}
+                className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-200 dark:hover:bg-neutral-800"
+              >
+                <Upload className="h-4 w-4" />
+                {isImporting ? "正在恢复..." : "恢复备份"}
               </button>
               <button
+                type="button"
                 onClick={handleExport}
                 disabled={isExporting}
-                className="px-5 py-2.5 text-sm font-medium bg-blue-600 text-white rounded-lg shadow-md hover:shadow-lg hover:bg-blue-700 transition-all transform hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none"
+                className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
               >
-                {isExporting ? "导出中..." : "导出"}
+                <Download className="h-4 w-4" />
+                {isExporting ? "正在导出..." : "导出记录"}
               </button>
             </div>
           </div>
-        </div>
-      </div>
+        </section>
 
-      <div className="w-full max-w-md mb-8 rounded-xl bg-gray-50 dark:bg-neutral-900 shadow-sm border border-gray-100 dark:border-neutral-800 hover:border-gray-200 dark:hover:border-neutral-700 transition-colors">
-        <div className="flex items-center justify-between p-5">
-          <div className="pr-4">
-            <h3 className="text-base font-medium text-gray-800 dark:text-neutral-100">
-              同步删除：插件 -&gt; B站
-            </h3>
-            <p className="text-xs text-gray-400 dark:text-neutral-500 mt-1">
-              删除本地记录时同步删除B站记录
-            </p>
+        <section className={sectionClass}>
+          <div className="border-b border-gray-200 p-5 dark:border-neutral-800">
+            <div className="flex items-start gap-3">
+              <Cloud className="mt-0.5 h-5 w-5 text-blue-600 dark:text-blue-400" />
+              <div>
+                <h2 className="text-base font-semibold">历史记录云端同步</h2>
+                <p className="mt-1 text-sm text-gray-500 dark:text-neutral-400">
+                  把这台电脑保存的历史记录和观看进度同步到你自己的云端地址。另一台电脑填同一个地址和密钥后点同步，就能合并记录。
+                </p>
+              </div>
+            </div>
           </div>
-          <label className="relative inline-flex items-center cursor-pointer shrink-0">
-            <input
-              type="checkbox"
-              className="sr-only peer"
-              checked={isSyncDelete}
-              onChange={handleSyncDeleteChange}
-            />
-            <div className="w-11 h-6 bg-gray-200 dark:bg-neutral-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 dark:after:border-neutral-600 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-          </label>
-        </div>
-      </div>
 
-      <div className="w-full max-w-md mb-8 rounded-xl bg-gray-50 dark:bg-neutral-900 shadow-sm border border-gray-100 dark:border-neutral-800 hover:border-gray-200 dark:hover:border-neutral-700 transition-colors">
-        <div className="flex items-center justify-between p-5">
-          <div className="pr-4">
-            <h3 className="text-base font-medium text-gray-800 dark:text-neutral-100">
-              同步删除：B站 -&gt; 插件
-            </h3>
-            <p className="text-xs text-gray-400 dark:text-neutral-500 mt-1">
-              B站删记录时同步删除本地记录
-            </p>
-          </div>
-          <label className="relative inline-flex items-center cursor-pointer shrink-0">
-            <input
-              type="checkbox"
-              className="sr-only peer"
-              checked={isSyncDeleteFromBilibili}
-              onChange={handleSyncDeleteFromBilibiliChange}
-            />
-            <div className="w-11 h-6 bg-gray-200 dark:bg-neutral-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 dark:after:border-neutral-600 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-          </label>
-        </div>
-      </div>
+          <div className="flex flex-col gap-5 p-5">
+            <div className="space-y-3 text-sm leading-6 text-gray-600 dark:text-neutral-300">
+              <p className="font-medium text-gray-900 dark:text-neutral-100">
+                合规免费额度方案：Cloudflare Workers + KV
+              </p>
+              <p>
+                适合个人使用。当前官方免费额度包含 Workers 每天 100,000 次请求、KV 1GB 存储、每天
+                100,000 次读取和 1,000 次写入。也可以用 Supabase 免费版或 GitHub Gist，但这版 SDK
+                先接入最简单的 HTTP 地址。
+              </p>
+              <p>
+                注意：这版会把记录明文保存到你配置的云端地址，不是端到端加密。只建议连接你自己控制的
+                Worker，密钥不要分享给别人。
+              </p>
+              <details open>
+                <summary className="cursor-pointer text-sm font-medium text-gray-900 hover:text-blue-600 dark:text-neutral-100 dark:hover:text-blue-400">
+                  详细教程：用 Cloudflare 免费额度搭一个同步云端
+                </summary>
+                <div className="mt-3 space-y-4 rounded-md border border-gray-200 bg-gray-50 p-4 dark:border-neutral-800 dark:bg-neutral-950">
+                  <div>
+                    <p className="font-medium text-gray-900 dark:text-neutral-100">开始前准备</p>
+                    <ol className="mt-2 list-decimal space-y-1 pl-5">
+                      <li>准备一个 Cloudflare 账号。</li>
+                      <li>准备一段同步密钥，建议至少 24 位，包含大小写字母、数字和符号。</li>
+                      <li>不要使用公开仓库、公开网页或别人提供的 Worker 地址保存自己的记录。</li>
+                    </ol>
+                  </div>
 
-      <div className="w-full max-w-md mb-8 rounded-xl bg-gray-50 dark:bg-neutral-900 shadow-sm border border-gray-100 dark:border-neutral-800 hover:border-gray-200 dark:hover:border-neutral-700 transition-colors">
-        <div className="flex items-center justify-between p-5">
-          <div>
-            <h3 className="text-base font-medium text-gray-800 dark:text-neutral-100">
-              自动同步时间间隔
-            </h3>
-            <p className="text-xs text-fuchsia-500 mt-1">单位：分钟</p>
-          </div>
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => handleSyncIntervalChange(Number(syncInterval) - 1)}
-              className="w-8 h-8 flex items-center justify-center text-gray-500 dark:text-neutral-300 bg-gray-100 dark:bg-neutral-800 rounded-full hover:bg-gray-200 dark:hover:bg-neutral-700 transition-colors disabled:opacity-50"
-              disabled={Number(syncInterval) <= 1}
-            >
-              -
-            </button>
-            <input
-              type="number"
-              value={syncInterval}
-              onChange={(e) => handleSyncIntervalChange(e.target.value)}
-              onBlur={() => {
-                const num = Number(syncInterval);
-                if (isNaN(num) || num < 1) {
-                  handleSyncIntervalChange(1);
-                }
-              }}
-              className="w-16 text-center text-lg text-gray-700 dark:text-neutral-100 font-mono font-medium bg-transparent border-b border-transparent hover:border-gray-300 dark:hover:border-neutral-600 focus:border-fuchsia-500 outline-none transition-colors"
-            />
-            <button
-              onClick={() => handleSyncIntervalChange(Number(syncInterval) + 1)}
-              className="w-8 h-8 flex items-center justify-center text-white bg-fuchsia-500 rounded-full hover:bg-fuchsia-600 transition-colors shadow-sm"
-            >
-              +
-            </button>
-          </div>
-        </div>
-      </div>
+                  <div>
+                    <p className="font-medium text-gray-900 dark:text-neutral-100">
+                      第 1 步：创建 KV 存储
+                    </p>
+                    <ol className="mt-2 list-decimal space-y-1 pl-5">
+                      <li>打开 Cloudflare Dashboard。</li>
+                      <li>在左侧进入“存储和数据库” &gt; “Workers KV”，然后点击“创建实例”。</li>
+                      <li>实例名称填写 bilibili-history-save-analysis-sync。</li>
+                      <li>点击“创建”，看到 KV 的指标页面就表示这一步完成。</li>
+                    </ol>
+                  </div>
 
-      <div className="w-full max-w-md mb-8 rounded-xl bg-gray-50 dark:bg-neutral-900 shadow-sm border border-gray-100 dark:border-neutral-800 hover:border-gray-200 dark:hover:border-neutral-700 transition-colors">
-        <div className="flex items-center justify-between p-5">
-          <div>
-            <h3 className="text-base font-medium text-gray-800 dark:text-neutral-100">
-              自动同步收藏夹间隔
-            </h3>
-            <p className="text-xs text-pink-500 mt-1">单位：分钟</p>
-          </div>
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => handleFavSyncIntervalChange(Number(favSyncInterval) - 5)}
-              className="w-8 h-8 flex items-center justify-center text-gray-500 dark:text-neutral-300 bg-gray-100 dark:bg-neutral-800 rounded-full hover:bg-gray-200 dark:hover:bg-neutral-700 transition-colors disabled:opacity-50"
-              disabled={Number(favSyncInterval) <= 5}
-            >
-              -
-            </button>
-            <input
-              type="number"
-              value={favSyncInterval}
-              onChange={(e) => handleFavSyncIntervalChange(e.target.value)}
-              onBlur={() => {
-                const num = Number(favSyncInterval);
-                if (isNaN(num) || num < 5) {
-                  handleFavSyncIntervalChange(15);
-                }
-              }}
-              className="w-16 text-center text-lg text-gray-700 dark:text-neutral-100 font-mono font-medium bg-transparent border-b border-transparent hover:border-gray-300 dark:hover:border-neutral-600 focus:border-pink-500 outline-none transition-colors"
-            />
-            <button
-              onClick={() => handleFavSyncIntervalChange(Number(favSyncInterval) + 5)}
-              className="w-8 h-8 flex items-center justify-center text-white bg-pink-500 rounded-full hover:bg-pink-600 transition-colors shadow-sm"
-            >
-              +
-            </button>
-          </div>
-        </div>
-      </div>
+                  <div>
+                    <p className="font-medium text-gray-900 dark:text-neutral-100">
+                      第 2 步：创建 Worker
+                    </p>
+                    <ol className="mt-2 list-decimal space-y-1 pl-5">
+                      <li>在左侧进入“计算” &gt; “Workers 和 Pages”。</li>
+                      <li>点击“创建应用程序”或“创建 Worker”。</li>
+                      <li>
+                        选择“从 Hello World 开始”，Worker 名称填写
+                        bilibili-history-save-analysis-sync，然后点击“部署”。
+                      </li>
+                      <li>进入 Worker 概述页面后，暂时不用点击“访问”。</li>
+                    </ol>
+                  </div>
 
-      {/* 确认弹窗 */}
-      {/* ... (Dialog code) ... */}
-      {showConfirmDialog && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
-          <div className="bg-white dark:bg-neutral-900 p-6 rounded-xl shadow-xl max-w-sm w-full mx-4 border border-transparent dark:border-neutral-800">
-            <h3 className="text-lg font-bold text-gray-900 dark:text-neutral-100 mb-2">
-              确认恢复出厂设置？
-            </h3>
-            <p className="text-gray-500 dark:text-neutral-400 mb-6 text-sm leading-relaxed">
-              此操作将<span className="text-red-600 font-medium">永久删除</span>
-              所有本地存储的历史记录和偏好设置。
-            </p>
-            {isResetLoading && (
-              <p className="text-blue-600 mb-4 text-sm animate-pulse">{resetStatus}</p>
+                  <div>
+                    <p className="font-medium text-gray-900 dark:text-neutral-100">
+                      第 3 步：替换 Worker 代码
+                    </p>
+                    <ol className="mt-2 list-decimal space-y-1 pl-5">
+                      <li>在 Worker 概述页面点击右上角“编辑代码”。</li>
+                      <li>删除编辑器中的默认 Hello World 代码。</li>
+                      <li>展开本教程下方的“查看 Cloudflare Worker 代码”，复制全部代码并粘贴。</li>
+                      <li>点击编辑器右上角“部署”。</li>
+                    </ol>
+                  </div>
+
+                  <div>
+                    <p className="font-medium text-gray-900 dark:text-neutral-100">
+                      第 4 步：绑定 KV
+                    </p>
+                    <ol className="mt-2 list-decimal space-y-1 pl-5">
+                      <li>返回 Worker 概述页面。</li>
+                      <li>点击顶部“绑定”，或者点击右侧“添加绑定”旁边的加号。</li>
+                      <li>选择“KV 命名空间”。</li>
+                      <li>变量名称必须填写 BILI_HISTORY_SYNC。</li>
+                      <li>KV 命名空间选择 bilibili-history-save-analysis-sync。</li>
+                      <li>保存，并按页面提示部署新版本。</li>
+                    </ol>
+                  </div>
+
+                  <div>
+                    <p className="font-medium text-gray-900 dark:text-neutral-100">
+                      第 5 步：添加同步密钥
+                    </p>
+                    <ol className="mt-2 list-decimal space-y-1 pl-5">
+                      <li>在 Worker 页面点击顶部“设置”，找到“变量和机密”。</li>
+                      <li>点击“添加”，类型选择“Secret”或“机密”。</li>
+                      <li>变量名称必须填写 SYNC_TOKEN。</li>
+                      <li>值填写开始时准备的同步密钥，然后保存并部署。</li>
+                      <li>同步密钥不会再次完整显示，请自己妥善保存，也不要截图或发给别人。</li>
+                    </ol>
+                  </div>
+
+                  <div>
+                    <p className="font-medium text-gray-900 dark:text-neutral-100">
+                      第 6 步：找到 Worker 地址
+                    </p>
+                    <ol className="mt-2 list-decimal space-y-1 pl-5">
+                      <li>返回 Worker 的“概述”页面。</li>
+                      <li>
+                        页面顶部灰色栏中的 workers.dev
+                        链接就是云端地址，也可以点击右上角“访问”后复制浏览器地址栏。
+                      </li>
+                      <li>完整地址应以 https:// 开头，并以 workers.dev 结尾。</li>
+                      <li>
+                        直接访问显示 unauthorized 或 401
+                        是正常的，因为普通网页请求没有携带同步密钥。
+                      </li>
+                    </ol>
+                  </div>
+
+                  <div>
+                    <p className="font-medium text-gray-900 dark:text-neutral-100">
+                      第 7 步：回到这个扩展
+                    </p>
+                    <ol className="mt-2 list-decimal space-y-1 pl-5">
+                      <li>把完整的 workers.dev 地址粘贴到下面的“云端地址”。</li>
+                      <li>把 SYNC_TOKEN 对应的密钥粘贴到“同步密钥”。</li>
+                      <li>先点击“测试连接”，提示连接正常后再点击“立即同步”。</li>
+                      <li>首次同步完成后，可以到 Cloudflare KV 的“KV 对”页面查看 history.json。</li>
+                      <li>另一台电脑填写相同地址和密钥，再点“立即同步”，即可合并记录。</li>
+                      <li>
+                        不再使用时，点击页面底部“删除云端记录”清除
+                        history.json，再点击“停用云端同步”清除本机保存的地址和密钥。
+                      </li>
+                    </ol>
+                  </div>
+
+                  <div>
+                    <p className="font-medium text-gray-900 dark:text-neutral-100">常见问题</p>
+                    <ol className="mt-2 list-decimal space-y-1 pl-5">
+                      <li>
+                        在浏览器直接打开 Worker 地址看到 401：属于正常现象，请在扩展里测试连接。
+                      </li>
+                      <li>
+                        扩展测试时出现 401：同步密钥不一致，检查 SYNC_TOKEN 和扩展中填写的密钥。
+                      </li>
+                      <li>出现 500：通常是 KV 变量名称没有填成 BILI_HISTORY_SYNC。</li>
+                      <li>
+                        测试连接没反应：确认 Worker 地址以 https:// 开头，并且 Worker 已部署。
+                      </li>
+                      <li>另一台电脑没有数据：两边都要点“立即同步”，并且使用同一个地址和密钥。</li>
+                    </ol>
+                  </div>
+                </div>
+              </details>
+              <div className="flex flex-wrap gap-3 text-xs">
+                <a
+                  href="https://developers.cloudflare.com/workers/platform/limits/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:underline dark:text-blue-400"
+                >
+                  Workers 免费额度
+                </a>
+                <a
+                  href="https://developers.cloudflare.com/kv/platform/limits/"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:underline dark:text-blue-400"
+                >
+                  KV 免费额度
+                </a>
+                <a
+                  href="https://supabase.com/pricing"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:underline dark:text-blue-400"
+                >
+                  Supabase 免费版
+                </a>
+                <a
+                  href="https://docs.github.com/rest/using-the-rest-api/rate-limits-for-the-rest-api"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:underline dark:text-blue-400"
+                >
+                  GitHub API 限额
+                </a>
+              </div>
+              <details>
+                <summary className="cursor-pointer text-sm font-medium text-gray-900 hover:text-blue-600 dark:text-neutral-100 dark:hover:text-blue-400">
+                  查看 Cloudflare Worker 代码
+                </summary>
+                <textarea
+                  readOnly
+                  value={cloudflareWorkerCode}
+                  className="mt-3 h-72 w-full resize-y rounded-md border border-gray-200 bg-gray-50 p-3 font-mono text-xs leading-5 text-gray-700 dark:border-neutral-800 dark:bg-neutral-950 dark:text-neutral-200"
+                />
+              </details>
+            </div>
+
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium">云端地址</span>
+              <input
+                type="url"
+                value={cloudEndpoint}
+                onChange={(event) => setCloudEndpoint(event.target.value)}
+                placeholder="https://your-worker.your-name.workers.dev"
+                className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-950"
+              />
+            </label>
+
+            <label className="flex flex-col gap-2">
+              <span className="text-sm font-medium">同步密钥</span>
+              <input
+                type="password"
+                value={cloudToken}
+                onChange={(event) => setCloudToken(event.target.value)}
+                placeholder="和 Worker 里的 SYNC_TOKEN 保持一致"
+                className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm dark:border-neutral-700 dark:bg-neutral-950"
+              />
+              <span className="text-xs text-gray-500 dark:text-neutral-400">
+                密钥只保存在这个浏览器里。不要把它发给别人。
+              </span>
+            </label>
+
+            {lastCloudSyncAt && (
+              <p className="text-xs text-gray-500 dark:text-neutral-400">
+                上次云端同步：{formatDateTime(new Date(lastCloudSyncAt).getTime(), timeZone)}
+              </p>
             )}
-            <div className="flex justify-end space-x-3">
-              <button
-                onClick={() => setShowConfirmDialog(false)}
-                className="px-4 py-2 text-sm text-gray-600 dark:text-neutral-300 hover:bg-gray-100 dark:hover:bg-neutral-800 rounded-lg transition-colors"
-                disabled={isResetLoading}
-              >
-                取消
-              </button>
-              <button
-                onClick={handleReset}
-                className="px-4 py-2 text-sm bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors shadow-sm"
-                disabled={isResetLoading}
-              >
-                确认删除
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
-      {showResetResultDialog && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white dark:bg-neutral-900 p-6 rounded-xl shadow-xl max-w-sm w-full mx-4 text-center border border-transparent dark:border-neutral-800">
-            <div className="w-12 h-12 bg-blue-100 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Check size={24} />
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 pt-5 dark:border-neutral-800">
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={handleDisableCloudSync}
+                  disabled={isDeletingCloud}
+                  className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                >
+                  <CloudOff className="h-4 w-4" />
+                  停用云端同步
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteCloudData}
+                  disabled={isDeletingCloud}
+                  className="inline-flex items-center gap-2 rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:bg-neutral-950 dark:text-red-300 dark:hover:bg-red-950/30"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {isDeletingCloud ? "正在删除..." : "删除云端记录"}
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={handleSaveCloudConfig}
+                  disabled={isSavingCloudConfig}
+                  className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                >
+                  <Save className="h-4 w-4" />
+                  {isSavingCloudConfig ? "正在保存..." : "保存设置"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleTestCloud}
+                  disabled={isTestingCloud}
+                  className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-950 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                >
+                  <Cloud className="h-4 w-4" />
+                  {isTestingCloud ? "正在测试..." : "测试连接"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCloudSync}
+                  disabled={isCloudSyncing}
+                  className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-4 w-4 ${isCloudSyncing ? "animate-spin" : ""}`} />
+                  {isCloudSyncing ? "正在同步..." : "立即同步"}
+                </button>
+              </div>
             </div>
-            <p className="text-lg text-gray-800 dark:text-neutral-100 mb-6 font-medium">
-              {resetResult}
-            </p>
-            <button
-              onClick={() => setShowResetResultDialog(false)}
-              className="w-full px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
-            >
-              确定
-            </button>
           </div>
-        </div>
-      )}
+        </section>
+      </div>
     </div>
   );
 };

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { ChevronLeft, ChevronRight, Calendar as CalendarIcon, X } from "lucide-react";
 import dayjs from "dayjs";
 import isBetween from "dayjs/plugin/isBetween";
+import { getTodayDateKey, TimeZonePreference } from "../utils/timezone";
 
 dayjs.extend(isBetween);
 
@@ -10,6 +11,7 @@ interface DateRangePickerProps {
   endDate: string;
   onChange: (start: string, end: string) => void;
   mode?: "range" | "single";
+  timeZone?: TimeZonePreference;
 }
 
 export const DateRangePicker: React.FC<DateRangePickerProps> = ({
@@ -17,9 +19,10 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({
   endDate,
   onChange,
   mode = "range",
+  timeZone = "system",
 }) => {
   const [isOpen, setIsOpen] = useState(false);
-  const [currentMonth, setCurrentMonth] = useState(dayjs());
+  const [currentMonth, setCurrentMonth] = useState(dayjs(getTodayDateKey(timeZone)));
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Sync current month with selected start date if getting open
@@ -103,7 +106,7 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({
         <input
           type="text"
           readOnly
-          placeholder="yyyy/mm/dd"
+          placeholder="按日期筛选"
           className="bg-transparent border-none text-sm text-gray-600 dark:text-neutral-200 placeholder-gray-400 dark:placeholder-neutral-500 focus:ring-0 py-1.5 pl-2 pr-1 outline-none w-[180px] cursor-pointer"
           value={displayText}
         />
@@ -114,7 +117,7 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({
               onChange("", "");
             }}
             className="pr-2 text-gray-400 dark:text-neutral-500 hover:text-red-500 dark:hover:text-red-400 transition-colors z-10"
-            title="清除日期"
+            title="清空日期"
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -192,11 +195,11 @@ export const DateRangePicker: React.FC<DateRangePickerProps> = ({
               onClick={() => onChange("", "")}
               className="text-xs text-gray-500 dark:text-neutral-400 hover:text-red-500 dark:hover:text-red-400"
             >
-              清除
+              清空日期
             </button>
             <button
               onClick={() => {
-                const today = dayjs().format("YYYY-MM-DD");
+                const today = getTodayDateKey(timeZone);
                 onChange(today, today);
               }}
               className="text-xs text-blue-500 dark:text-blue-400 hover:text-blue-600 dark:hover:text-blue-300"

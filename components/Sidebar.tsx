@@ -1,79 +1,19 @@
-import { useLocation } from "react-router-dom";
-import { useState, useEffect } from "react";
-import {
-  CloudIcon,
-  Star,
-  HistoryIcon,
-  InfoIcon,
-  MessageCircleIcon,
-  MusicIcon,
-  SettingsIcon,
-  HardDriveDownload,
-  Sparkles,
-  Sun,
-  Moon,
-  Heart,
-} from "lucide-react";
-import { UserInfo } from "./UserInfo";
-import ExpandableMenu from "./ExpandableMenu";
-import { UPDATE_HISTORY, HIDE_USER_INFO, HIDDEN_MENUS, THEME_MODE } from "../utils/constants";
+import { BarChart3, HistoryIcon, Moon, SettingsIcon, Sun } from "lucide-react";
+import { useEffect, useState } from "react";
+import { THEME_MODE, UPDATE_HISTORY } from "../utils/constants";
 import { getStorageValue } from "../utils/storage";
 import { setTheme, type ThemeMode } from "../utils/theme";
 
-const menuList = [
+const navItems = [
   {
     title: "历史记录",
     icon: <HistoryIcon className="w-4 h-4" />,
     to: "/",
   },
   {
-    title: "收藏夹",
-    icon: <Star className="w-4 h-4" />,
-    to: "/favorites",
-  },
-  {
-    title: "AI探索",
-    icon: <Sparkles className="w-4 h-4" />,
-    to: "/ai-search",
-  },
-  {
-    title: "听歌",
-    icon: <MusicIcon className="w-4 h-4" />,
-    subMenus: [
-      {
-        title: "搜索",
-        to: "/music/search",
-      },
-      {
-        title: "我喜欢的音乐",
-        to: "/music/liked",
-      },
-    ],
-  },
-  {
-    title: "关于",
-    icon: <InfoIcon className="w-4 h-4" />,
-    to: "/about",
-  },
-  {
-    title: "反馈",
-    icon: <MessageCircleIcon className="w-4 h-4" />,
-    to: "/feedback",
-  },
-  {
-    title: "云同步",
-    icon: <CloudIcon className="w-4 h-4" />,
-    to: "/cloud-sync",
-  },
-  {
-    title: "WebDAV",
-    icon: <HardDriveDownload className="w-4 h-4" />,
-    to: "/webdav-sync",
-  },
-  {
-    title: "赞赏",
-    icon: <Heart className="w-4 h-4" />,
-    to: "/reward",
+    title: "记录分析",
+    icon: <BarChart3 className="w-4 h-4" />,
+    to: "/analytics",
   },
   {
     title: "设置",
@@ -82,61 +22,61 @@ const menuList = [
   },
 ];
 
-export const Sidebar = () => {
-  const location = useLocation();
+type SidebarProps = {
+  activePath: string;
+};
 
-  const [version, setVersion] = useState<string>(UPDATE_HISTORY[0]?.version || "");
-  const [hideUserInfo, setHideUserInfo] = useState(false);
-  const [hiddenMenus, setHiddenMenus] = useState<string[]>([]);
+export const Sidebar = ({ activePath }: SidebarProps) => {
   const [themeMode, setThemeMode] = useState<ThemeMode>("light");
+  const version = UPDATE_HISTORY[0]?.version || "";
 
   useEffect(() => {
-    getStorageValue(HIDE_USER_INFO, false).then(setHideUserInfo);
-    getStorageValue(HIDDEN_MENUS, []).then(setHiddenMenus);
-    getStorageValue<ThemeMode>(THEME_MODE, "light").then((m) =>
-      setThemeMode(m === "dark" ? "dark" : "light"),
+    getStorageValue<ThemeMode>(THEME_MODE, "light").then((mode) =>
+      setThemeMode(mode === "dark" ? "dark" : "light"),
     );
 
     const handleStorageChange = (
       changes: { [key: string]: Browser.storage.StorageChange },
       areaName: string,
     ) => {
-      if (areaName === "local") {
-        if (changes[HIDE_USER_INFO]) {
-          setHideUserInfo(changes[HIDE_USER_INFO].newValue as boolean);
-        }
-        if (changes[HIDDEN_MENUS]) {
-          setHiddenMenus((changes[HIDDEN_MENUS].newValue as string[]) || []);
-        }
-        if (changes[THEME_MODE]) {
-          const next = changes[THEME_MODE].newValue as ThemeMode | undefined;
-          setThemeMode(next === "dark" ? "dark" : "light");
-        }
-      }
+      if (areaName !== "local" || !changes[THEME_MODE]) return;
+      const next = changes[THEME_MODE].newValue as ThemeMode | undefined;
+      setThemeMode(next === "dark" ? "dark" : "light");
     };
 
     browser.storage.onChanged.addListener(handleStorageChange);
-    return () => {
-      browser.storage.onChanged.removeListener(handleStorageChange);
-    };
+    return () => browser.storage.onChanged.removeListener(handleStorageChange);
   }, []);
-
-  const handleToggleTheme = () => {
-    setTheme(themeMode === "dark" ? "light" : "dark");
-  };
 
   const isDark = themeMode === "dark";
 
   return (
-    <div className="fixed top-0 left-0 w-40 bg-gray-100 dark:bg-[#141414] dark:text-neutral-100 flex-shrink-0 h-full">
-      {!hideUserInfo && <UserInfo />}
+    <aside className="fixed top-0 left-0 w-40 bg-gray-100 dark:bg-[#141414] dark:text-neutral-100 flex-shrink-0 h-full">
+      <div className="border-b border-gray-200 px-4 py-4 dark:border-neutral-800">
+        <p className="text-sm font-semibold leading-5 text-gray-900 dark:text-neutral-100">
+          哔哩哔哩
+        </p>
+        <p className="text-xs leading-5 text-gray-500 dark:text-neutral-400">历史记录保存与分析</p>
+      </div>
 
       <nav className="space-y-2 p-4">
-        {menuList
-          .filter((item) => !hiddenMenus.includes(item.title))
-          .map((item, index) => (
-            <ExpandableMenu key={index} {...item} />
-          ))}
+        {navItems.map((item) => {
+          const isActive = activePath === item.to;
+          return (
+            <a
+              key={item.to}
+              href={`#${item.to}`}
+              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${
+                isActive
+                  ? "bg-white dark:bg-neutral-800 text-blue-600 dark:text-blue-400 shadow-sm"
+                  : "text-gray-700 dark:text-neutral-300 hover:bg-white/80 dark:hover:bg-neutral-800"
+              }`}
+            >
+              {item.icon}
+              <span>{item.title}</span>
+            </a>
+          );
+        })}
       </nav>
 
       <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between">
@@ -145,14 +85,14 @@ export const Sidebar = () => {
         </p>
         <button
           type="button"
-          onClick={handleToggleTheme}
-          title={isDark ? "切换到白天模式" : "切换到黑夜模式"}
-          aria-label={isDark ? "切换到白天模式" : "切换到黑夜模式"}
+          onClick={() => setTheme(isDark ? "light" : "dark")}
+          title={isDark ? "切换到浅色模式" : "切换到深色模式"}
+          aria-label={isDark ? "切换到浅色模式" : "切换到深色模式"}
           className="inline-flex items-center justify-center w-8 h-8 rounded-md text-gray-600 hover:bg-gray-200 dark:text-neutral-300 dark:hover:bg-neutral-800 transition-colors"
         >
           {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
         </button>
       </div>
-    </div>
+    </aside>
   );
 };

@@ -1,89 +1,16 @@
 import { HistoryItem as HistoryItemType } from "../utils/types";
 import { getContentUrl } from "../utils/common";
-import { Trash2 } from "lucide-react";
-import { deleteHistoryItem, checkIsFavorited } from "../utils/db";
-import React, { useState, useEffect } from "react";
-import { getStorageValue } from "../utils/storage";
-import { toast } from "react-hot-toast";
-import { IS_SYNC_DELETE } from "../utils/constants";
+import React from "react";
 import { getTypeTag } from "../utils/common";
+import { formatDateTime, TimeZonePreference } from "../utils/timezone";
 
 interface HistoryItemProps {
   item: HistoryItemType;
-  onDelete?: () => void;
+  timeZone?: TimeZonePreference;
 }
 
-const deleteBilibiliHistory = async (business: string, id: number): Promise<void> => {
-  // 从background script获取cookie
-  const cookies = await new Promise<Browser.cookies.Cookie[]>((resolve, reject) => {
-    browser.runtime.sendMessage({ action: "getCookies" }, (response) => {
-      if (browser.runtime.lastError) {
-        reject(browser.runtime.lastError);
-        return;
-      }
-      if (response.success) {
-        resolve(response.cookies);
-      } else {
-        reject(new Error(response.error));
-      }
-    });
-  });
-
-  const bili_jct = cookies.find((cookie) => cookie.name === "bili_jct")?.value;
-  const SESSDATA = cookies.find((cookie) => cookie.name === "SESSDATA")?.value;
-
-  if (!bili_jct || !SESSDATA) {
-    throw new Error("未找到必要的Cookie,请先登录B站");
-  }
-
-  const kid = `${business}_${id}`;
-  const response = await fetch("https://api.bilibili.com/x/v2/history/delete", {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: `kid=${kid}&csrf=${bili_jct}`,
-  });
-
-  if (!response.ok) {
-    console.error("删除历史记录失败:", response.statusText);
-    return;
-  }
-
-  const data = await response.json();
-  if (data.code !== 0) {
-    console.error("删除历史记录失败:", data.message);
-  }
-};
-
-export const HistoryItem: React.FC<HistoryItemProps> = ({ item, onDelete }) => {
-  const [isFav, setIsFav] = useState(item.is_fav === true);
-
-  useEffect(() => {
-    if (item.is_fav === true) return;
-    checkIsFavorited(item.id).then((res) => setIsFav(res));
-  }, [item.id, item.is_fav]);
-
-  const handleDelete = async (e: React.MouseEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    try {
-      const isSyncDelete = await getStorageValue(IS_SYNC_DELETE, true);
-      if (isSyncDelete) {
-        // 先删除B站服务器上的历史记录
-        await deleteBilibiliHistory(item.business, item.id);
-        console.log("删除B站服务器上的历史记录成功");
-      }
-      // 删除本地数据库中的历史记录
-      await deleteHistoryItem(item.id);
-      onDelete?.();
-    } catch (error) {
-      console.error("删除历史记录失败:", error);
-      toast.error(error instanceof Error ? error.message : "删除历史记录失败");
-    }
-  };
+export const HistoryItem: React.FC<HistoryItemProps> = ({ item, timeZone = "system" }) => {
+  const isFav = item.is_fav === true;
 
   const formatDuration = (seconds?: number) => {
     if (seconds === undefined || seconds === null) return "00:00";
@@ -96,19 +23,24 @@ export const HistoryItem: React.FC<HistoryItemProps> = ({ item, onDelete }) => {
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   };
 
-  const getProgressText = () => {
-    if (item.progress === -1) return "100%"; // Should not be called if progress is -1 for this text
-    if (
-      item.progress === undefined ||
-      item.duration === undefined ||
-      item.progress === null ||
-      item.duration === null ||
-      item.duration === 0
-    )
-      return "";
-    const percentage = Math.round((item.progress / item.duration) * 100);
-    return `${formatDuration(item.progress)} / ${formatDuration(item.duration)} · ${percentage}%`;
+  const getProgressInfo = () => {
+    const duration = item.duration;
+    if (duration === undefined || duration === null || duration <= 0) {
+      return item.progress === -1 ? { text: "100%", percent: 100 } : null;
+    }
+
+    const watchedSeconds =
+      item.progress === -1 ? duration : Math.min(Math.max(item.progress ?? 0, 0), duration);
+    if (watchedSeconds <= 0) return null;
+
+    const percentage = Math.round((watchedSeconds / duration) * 100);
+    return {
+      text: `${formatDuration(watchedSeconds)} / ${formatDuration(duration)} · ${percentage}%`,
+      percent: Math.min(100, percentage),
+    };
   };
+
+  const progressInfo = getProgressInfo();
 
   return (
     <div className="border border-gray-200 dark:border-neutral-800 dark:bg-neutral-900 rounded-lg overflow-hidden">
@@ -127,40 +59,33 @@ export const HistoryItem: React.FC<HistoryItemProps> = ({ item, onDelete }) => {
             />
 
             {/* 观看进度条 */}
-            {item.progress !== -1 && (item.progress ?? 0) > 0 && (item.duration ?? 0) > 0 && (
+            {progressInfo && (
               <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/30">
                 <div
                   className="h-full bg-[#fb7299]"
                   style={{
-                    width: `${Math.min(100, ((item.progress || 0) / (item.duration || 1)) * 100)}%`,
+                    width: `${progressInfo.percent}%`,
                   }}
                 />
               </div>
             )}
 
-            {/* 进度文字 & 已看完标签 & 类型标签 */}
+            {/* 进度文字 & 类型标签 */}
             <div className="absolute bottom-2 left-2 right-2 flex justify-between items-end pointer-events-none">
-              {item.progress !== -1 && (item.progress ?? 0) > 0 && (item.duration ?? 0) > 0 ? (
+              {progressInfo ? (
                 <span className="text-[10px] text-white bg-black/60 backdrop-blur-sm px-1.5 py-0.5 rounded border border-white/10">
-                  {getProgressText()}
+                  {progressInfo.text}
                 </span>
               ) : (
                 <span></span>
               )}{" "}
               {/* Empty span to maintain flex spacing if no progress text */}
-              {getTypeTag(item.business) !== "视频" && (
+              {item.business !== "archive" && (
                 <span className="px-2 py-1 rounded text-xs text-white bg-[#fb7299]">
                   {getTypeTag(item.business)}
                 </span>
               )}
             </div>
-
-            {/* "已看完" 标签 (moved to top-left) */}
-            {item.progress === -1 && (
-              <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded text-[10px] text-white bg-black/60 backdrop-blur-sm border border-white/20">
-                已看完
-              </span>
-            )}
 
             {/* "已收藏" 标签 (positioned at top-right) */}
             {isFav && (
@@ -170,17 +95,9 @@ export const HistoryItem: React.FC<HistoryItemProps> = ({ item, onDelete }) => {
             )}
           </div>
           <div className="p-2.5">
-            <div className="flex items-start justify-between gap-2">
-              <h3 className="m-0 text-sm leading-[1.4] h-10 overflow-hidden line-clamp-2 flex-1">
-                {item.title}
-              </h3>
-              <button
-                className="p-1 hover:bg-gray-100 dark:hover:bg-neutral-800 rounded-full transition-colors"
-                onClick={handleDelete}
-              >
-                <Trash2 className="w-4 h-4 text-gray-500 dark:text-neutral-400" />
-              </button>
-            </div>
+            <h3 className="m-0 text-sm leading-[1.4] h-10 overflow-hidden line-clamp-2">
+              {item.title}
+            </h3>
             <div className="flex justify-between items-center text-gray-500 dark:text-neutral-400 text-xs mt-1">
               <span
                 onClick={(e) => {
@@ -192,7 +109,7 @@ export const HistoryItem: React.FC<HistoryItemProps> = ({ item, onDelete }) => {
               >
                 {item.author_name}
               </span>
-              <span>{new Date(item.view_at * 1000).toLocaleString()}</span>
+              <span>{formatDateTime(item.view_at * 1000, timeZone)}</span>
             </div>
           </div>
         </div>

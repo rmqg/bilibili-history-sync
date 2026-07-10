@@ -4,9 +4,10 @@ import { getHistory, getTotalHistoryCount } from "../utils/db";
 import { HistoryItem as HistoryItemType } from "../utils/types";
 import { useDebounce } from "use-debounce";
 import { RefreshCwIcon, ChevronDownIcon, Search, X, Filter, Minus, Plus } from "lucide-react";
-import { DATE_SELECTION_MODE, GRID_COLUMNS } from "../utils/constants";
+import { DATE_SELECTION_MODE, GRID_COLUMNS, TIME_ZONE } from "../utils/constants";
 import { DateRangePicker } from "../components/DateRangePicker";
 import { getStorageValue, setStorageValue } from "../utils/storage";
+import { TimeZonePreference } from "../utils/timezone";
 
 export const History: React.FC = () => {
   const [history, setHistory] = useState<HistoryItemType[]>([]);
@@ -26,6 +27,7 @@ export const History: React.FC = () => {
   const [totalHistoryCount, setTotalHistoryCount] = useState(0);
   const [dateSelectionMode, setDateSelectionMode] = useState<"range" | "single">("range");
   const [gridColumns, setGridColumns] = useState(4);
+  const [timeZone, setTimeZone] = useState<TimeZonePreference>("system");
 
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
@@ -44,6 +46,7 @@ export const History: React.FC = () => {
     getStorageValue<number>(GRID_COLUMNS, 4).then((cols) => {
       setGridColumns(cols);
     });
+    getStorageValue<TimeZonePreference>(TIME_ZONE, "system").then(setTimeZone);
   }, []);
 
   const handleColumnChange = (delta: number) => {
@@ -55,12 +58,12 @@ export const History: React.FC = () => {
   };
 
   const typeOptions = [
-    { value: "all", label: "全部分类" },
-    { value: "archive", label: "视频" },
+    { value: "all", label: "全部记录" },
+    { value: "archive", label: "普通视频" },
     { value: "live", label: "直播" },
     { value: "pgc", label: "番剧" },
     { value: "article", label: "专栏" },
-    { value: "cheese", label: "课堂" },
+    { value: "cheese", label: "课程" },
   ];
 
   const loadHistory = async (isAppend: boolean = false) => {
@@ -84,6 +87,7 @@ export const History: React.FC = () => {
         { start: startDate, end: endDate },
         selectedType,
         searchType,
+        timeZone,
       );
 
       if (isAppend) {
@@ -109,7 +113,7 @@ export const History: React.FC = () => {
 
   useEffect(() => {
     loadHistory(false);
-  }, [debouncedKeyword, startDate, endDate, selectedType, searchType]);
+  }, [debouncedKeyword, startDate, endDate, selectedType, searchType, timeZone]);
 
   useEffect(() => {
     getTotalCount();
@@ -160,9 +164,9 @@ export const History: React.FC = () => {
 
   const getLoadMoreText = () => {
     if (history.length === 0) {
-      return keyword.trim() ? "没有找到匹配的历史记录" : "暂无历史记录";
+      return keyword.trim() ? "没有找到相关记录" : "还没有保存记录";
     }
-    return isLoading ? "加载中..." : hasMore ? "向下滚动加载更多" : "没有更多了";
+    return isLoading ? "正在加载更多记录..." : hasMore ? "继续向下滚动查看更多" : "已经到底了";
   };
 
   return (
@@ -224,7 +228,7 @@ export const History: React.FC = () => {
                   onClick={() => setIsSearchKindDropdownOpen(!isSearchKindDropdownOpen)}
                 >
                   <span>
-                    {searchType === "all" && "综合"}
+                    {searchType === "all" && "全部"}
                     {searchType === "title" && "标题"}
                     {searchType === "up" && "UP主"}
                     {searchType === "bvid" && "BV号"}
@@ -241,11 +245,11 @@ export const History: React.FC = () => {
                     ></div>
                     <div className="absolute top-full left-0 mt-2 w-28 bg-white dark:bg-neutral-900 rounded-lg shadow-lg border border-gray-100 dark:border-neutral-800 py-1 z-20 animate-in fade-in zoom-in-95 duration-200 overflow-hidden">
                       {[
-                        { value: "all", label: "综合搜索" },
-                        { value: "title", label: "视频标题" },
+                        { value: "all", label: "全部" },
+                        { value: "title", label: "标题" },
                         { value: "up", label: "UP主" },
-                        { value: "bvid", label: "视频BV号" },
-                        { value: "avid", label: "视频AV号" },
+                        { value: "bvid", label: "BV号" },
+                        { value: "avid", label: "AV号" },
                       ].map((option) => (
                         <button
                           key={option.value}
@@ -272,12 +276,12 @@ export const History: React.FC = () => {
                 className="flex-1 bg-transparent border-none focus:ring-0 pl-3 pr-10 py-2 text-sm text-gray-700 dark:text-neutral-100 placeholder-gray-400 dark:placeholder-neutral-500 focus:outline-none"
                 placeholder={
                   searchType === "bvid"
-                    ? "输入BV号..."
+                    ? "输入 BV 号"
                     : searchType === "avid"
-                      ? "输入AV号..."
+                      ? "输入 AV 号"
                       : searchType === "up"
-                        ? "输入UP主名称或UID..."
-                        : "搜索..."
+                        ? "输入 UP 主或 UID"
+                        : "搜索标题、UP 主、BV 号或 AV 号"
                 }
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
@@ -308,6 +312,7 @@ export const History: React.FC = () => {
                 setEndDate(end);
               }}
               mode={dateSelectionMode}
+              timeZone={timeZone}
             />
 
             {/* 列数调节 */}
@@ -316,18 +321,18 @@ export const History: React.FC = () => {
                 onClick={() => handleColumnChange(-1)}
                 disabled={gridColumns <= 2}
                 className="p-1 text-gray-500 dark:text-neutral-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-full transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                title="减少列数"
+                title="每行少显示一个"
               >
                 <Minus className="w-3.5 h-3.5" />
               </button>
               <span className="text-xs font-medium text-gray-600 dark:text-neutral-300 text-center tabular-nums whitespace-nowrap">
-                列数({gridColumns})
+                每行 {gridColumns} 个
               </span>
               <button
                 onClick={() => handleColumnChange(1)}
                 disabled={gridColumns >= 8}
                 className="p-1 text-gray-500 dark:text-neutral-400 hover:text-blue-600 dark:hover:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-full transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-                title="增加列数"
+                title="每行多显示一个"
               >
                 <Plus className="w-3.5 h-3.5" />
               </button>
@@ -342,7 +347,7 @@ export const History: React.FC = () => {
                 isLoading ? "opacity-50 cursor-not-allowed" : ""
               }`}
               disabled={isLoading}
-              title="刷新"
+              title="刷新列表"
             >
               <RefreshCwIcon className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
             </button>
@@ -357,14 +362,7 @@ export const History: React.FC = () => {
         }}
       >
         {history.map((item) => (
-          <HistoryItem
-            key={`${item.id}-${item.view_at}`}
-            item={item}
-            onDelete={() => {
-              setHistory((prev) => prev.filter((i) => i.id !== item.id));
-              setTotalHistoryCount((prev) => prev - 1);
-            }}
-          />
+          <HistoryItem key={`${item.id}-${item.view_at}`} item={item} timeZone={timeZone} />
         ))}
         <div
           ref={loadMoreCallbackRef}
@@ -381,9 +379,14 @@ export const History: React.FC = () => {
           </div>
           <p className="text-gray-500 dark:text-neutral-400 text-lg">
             {keyword || startDate || selectedType !== "all" || searchType !== "all"
-              ? "没有找到相关记录"
-              : "暂无历史记录"}
+              ? "没有找到符合条件的记录"
+              : "还没有保存历史记录"}
           </p>
+          {!keyword && !startDate && selectedType === "all" && searchType === "all" && (
+            <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-gray-400 dark:text-neutral-500">
+              请先登录哔哩哔哩网页版，然后点击浏览器工具栏里的扩展图标，选择“保存历史记录”。第一次使用建议勾选“重新保存全部历史”。
+            </p>
+          )}
           {(keyword || startDate || selectedType !== "all" || searchType !== "all") && (
             <button
               onClick={() => {
@@ -395,7 +398,7 @@ export const History: React.FC = () => {
               }}
               className="mt-4 text-blue-500 dark:text-blue-400 hover:text-blue-600 dark:hover:text-blue-300 hover:underline text-sm"
             >
-              清除所有筛选
+              清空筛选条件
             </button>
           )}
         </div>
