@@ -59,7 +59,7 @@
 
 ## 8. 联系方式
 
-使用帮助见：https://rmqg.github.io/bilibili-history-wxt/support/
+使用帮助见：https://blog.rmqg.org/bilibili-history-wxt/support/
 
 问题、隐私请求或安全问题可通过 GitHub Issues 联系：
 
