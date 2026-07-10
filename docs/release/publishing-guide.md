@@ -80,13 +80,13 @@ Privacy practices 建议按保守口径填写：
 
 ## 5. Firefox Add-ons
 
-本项目是现有 AMO 条目的升级，必须保留 manifest 中的固定 ID：
+本项目作为独立扩展发布，不复用 MTI 上游项目的 AMO 条目。manifest 中的固定 ID 为：
 
 ```text
-{14287688-c813-40b0-9570-87a2d72abfa8}
+bilibili-history-sync@rmqg.org
 ```
 
-1. 打开现有 AMO 开发者条目并上传 Firefox ZIP。
+1. 在 AMO 创建新的公开附加组件并上传 Firefox ZIP。首次提交后，后续版本必须继续使用上述固定 ID。
 2. 同时上传 sources ZIP，构建说明见仓库根目录 `FIREFOX_REVIEW.md`。
 3. 数据收集声明应显示“默认不收集”，并列出可选 `browsingActivity` 与 `authenticationInfo`。
 4. 详细描述必须说明云端同步默认关闭、数据只发送到用户指定地址。

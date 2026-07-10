@@ -36,7 +36,7 @@ export default defineConfig({
       ? {
           browser_specific_settings: {
             gecko: {
-              id: "{14287688-c813-40b0-9570-87a2d72abfa8}",
+              id: "bilibili-history-sync@rmqg.org",
               strict_min_version: "140.0",
               data_collection_permissions: {
                 required: ["none"],

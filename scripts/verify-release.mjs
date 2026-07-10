@@ -30,7 +30,7 @@ for (const target of targets) {
   if (target === "firefox-mv2") {
     const browserSpecificSettings = manifest.browser_specific_settings;
     const gecko = browserSpecificSettings?.gecko;
-    assert(gecko?.id === "{14287688-c813-40b0-9570-87a2d72abfa8}", "Firefox ID 不正确");
+    assert(gecko?.id === "bilibili-history-sync@rmqg.org", "Firefox ID 不正确");
     assert(gecko?.strict_min_version === "140.0", "Firefox 最低版本不正确");
     assert(
       browserSpecificSettings?.gecko_android?.strict_min_version === "142.0",
