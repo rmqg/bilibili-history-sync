@@ -46,7 +46,7 @@
 | Firefox | 已提交 Firefox Add-ons，审核完成后开放商店安装                                                     |
 | Safari  | 使用免费 Apple Account 在自己的 Mac 上签名安装，参见 [Safari 免费安装指南](docs/safari-install.md) |
 
-审核期间，开发者可以从 [GitHub Actions](https://github.com/rmqg/bilibili-history-sync/actions) 获取构建产物，或按下面的本地开发方式构建。不要安装来源不明的第三方打包版本。
+审核期间，开发者可以从 [GitHub Releases](https://github.com/rmqg/bilibili-history-sync/releases/latest) 获取已校验的构建包，或按下面的本地开发方式构建。Chrome、Edge 和 Firefox 的 ZIP 需要通过浏览器开发者模式加载，不能像商店版本一样直接双击安装。不要安装来源不明的第三方打包版本。
 
 ## 本地开发
 
