@@ -1,13 +1,21 @@
 import {
   HAS_FULL_SYNC,
   IS_SYNCING,
+  LAST_FULL_SYNC,
   SYNC_INTERVAL,
+  SYNC_LOCK_STARTED_AT,
   SYNC_PROGRESS_HISTORY,
   SYNC_TIME_REMAIN,
 } from "../utils/constants";
 import { openDB, putHistoryAndWatchEvent } from "../utils/db";
 import { getStorageValue, setStorageValue } from "../utils/storage";
 import { HistoryItem } from "../utils/types";
+import {
+  getIncrementalCutoff,
+  isFullReconcileDue,
+  isSyncLockActive,
+  shouldStopIncrementalScan,
+} from "../utils/historySync";
 
 const getErrorMessage = (error: unknown) => {
   if (error instanceof Error && error.message) return error.message;
@@ -51,10 +59,15 @@ const getSessdataCookie = async () => {
 };
 
 export default defineBackground(() => {
+  const ensureSyncAlarm = async () => {
+    const alarm = await browser.alarms.get("syncHistory");
+    if (!alarm) browser.alarms.create("syncHistory", { periodInMinutes: 1 });
+  };
+
+  void ensureSyncAlarm();
+
   browser.runtime.onInstalled.addListener(async (details) => {
-    browser.alarms.create("syncHistory", {
-      periodInMinutes: 1,
-    });
+    await ensureSyncAlarm();
 
     if (details.reason === "install") {
       browser.tabs.create({ url: browser.runtime.getURL("/my-history.html") });
@@ -77,7 +90,7 @@ export default defineBackground(() => {
       return;
     }
 
-    intervalSync(syncInterval);
+    await intervalSync(syncInterval);
   });
 
   browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -94,9 +107,14 @@ export default defineBackground(() => {
   });
 
   const intervalSync = async (syncInterval: number) => {
+    let lockAcquired = false;
     try {
-      const isSyncing = await getStorageValue(IS_SYNCING);
-      if (isSyncing) return;
+      const now = Date.now();
+      const [isSyncing, lockStartedAt] = await Promise.all([
+        getStorageValue(IS_SYNCING, false),
+        getStorageValue(SYNC_LOCK_STARTED_AT, 0),
+      ]);
+      if (isSyncLockActive(isSyncing, lockStartedAt, now)) return;
 
       const hasFullSync = await getStorageValue(HAS_FULL_SYNC, false);
       if (!hasFullSync) {
@@ -105,28 +123,43 @@ export default defineBackground(() => {
       }
 
       await setStorageValue(IS_SYNCING, true);
+      await setStorageValue(SYNC_LOCK_STARTED_AT, now);
+      lockAcquired = true;
       await setStorageValue(SYNC_PROGRESS_HISTORY, {
         current: 0,
         message: "正在检查有没有新的历史记录...",
       });
-      await syncHistory(false);
+      const lastFullSyncAt = await getStorageValue(LAST_FULL_SYNC, 0);
+      const runFullSync = isFullReconcileDue(lastFullSyncAt, now);
+      await syncHistory(runFullSync);
+      if (runFullSync) await setStorageValue(LAST_FULL_SYNC, now);
     } catch (error) {
       console.error("定时读取失败:", error);
     } finally {
-      await setStorageValue(IS_SYNCING, false);
+      if (lockAcquired) {
+        await setStorageValue(IS_SYNCING, false);
+        await setStorageValue(SYNC_LOCK_STARTED_AT, 0);
+      }
       await setStorageValue(SYNC_PROGRESS_HISTORY, { current: 0, message: "检查完成" });
       await setStorageValue(SYNC_TIME_REMAIN, syncInterval);
     }
   };
 
   const handleSyncHistory = async (message: any) => {
+    let lockAcquired = false;
     try {
-      const isSyncing = await getStorageValue(IS_SYNCING);
-      if (isSyncing) {
+      const now = Date.now();
+      const [isSyncing, lockStartedAt] = await Promise.all([
+        getStorageValue(IS_SYNCING, false),
+        getStorageValue(SYNC_LOCK_STARTED_AT, 0),
+      ]);
+      if (isSyncLockActive(isSyncing, lockStartedAt, now)) {
         return { success: false, error: "正在保存，请等这次结束后再试" };
       }
 
       await setStorageValue(IS_SYNCING, true);
+      await setStorageValue(SYNC_LOCK_STARTED_AT, now);
+      lockAcquired = true;
       await setStorageValue(SYNC_PROGRESS_HISTORY, {
         current: 0,
         message: "正在连接哔哩哔哩，并保存历史记录...",
@@ -138,6 +171,7 @@ export default defineBackground(() => {
       if (forceFullSync || !hasFullSync) {
         await syncHistory(true);
         await setStorageValue(HAS_FULL_SYNC, true);
+        await setStorageValue(LAST_FULL_SYNC, now);
         return {
           success: true,
           message: hasFullSync ? "全部历史记录已保存，可以打开记录页面查看" : "第一次保存完成",
@@ -145,12 +179,15 @@ export default defineBackground(() => {
       }
 
       await syncHistory(false);
-      return { success: true, message: "更新完成，最近 3 天的历史记录已重新检查" };
+      return { success: true, message: "更新完成，最近 7 天的历史记录已重新检查" };
     } catch (error) {
       console.error("保存失败:", error);
       return { success: false, error: getErrorMessage(error) };
     } finally {
-      await setStorageValue(IS_SYNCING, false);
+      if (lockAcquired) {
+        await setStorageValue(IS_SYNCING, false);
+        await setStorageValue(SYNC_LOCK_STARTED_AT, 0);
+      }
       await setStorageValue(SYNC_PROGRESS_HISTORY, { current: 0, message: "保存完成" });
     }
   };
@@ -174,7 +211,7 @@ export default defineBackground(() => {
       const syncStartedAt = Date.now();
       const previousSync = await browser.storage.local.get("lastSync");
       const previousSyncAt = Number(previousSync.lastSync) || 0;
-      const recentRescanCutoff = Math.floor((previousSyncAt - 72 * 60 * 60 * 1000) / 1000);
+      const recentRescanCutoff = getIncrementalCutoff(previousSyncAt, syncStartedAt);
       const visitedCursors = new Set<string>();
 
       while (hasMore) {
@@ -246,13 +283,14 @@ export default defineBackground(() => {
 
           await new Promise((resolve) => setTimeout(resolve, 1000));
 
-          if (!isFullSync && previousSyncAt > 0) {
-            const oldestViewAt = Math.min(
-              ...data.data.list.map((item: { view_at: number }) => Number(item.view_at)),
-            );
-            if (oldestViewAt <= recentRescanCutoff) {
-              hasMore = false;
-            }
+          if (
+            shouldStopIncrementalScan(
+              data.data.list.map((item: { view_at: number }) => Number(item.view_at)),
+              recentRescanCutoff,
+              isFullSync,
+            )
+          ) {
+            hasMore = false;
           }
         }
       }
@@ -264,7 +302,7 @@ export default defineBackground(() => {
           totalSynced > 0
             ? isFullSync
               ? `保存完成，本次检查并保存了 ${totalSynced} 条记录`
-              : `保存完成，已重新检查最近 3 天的 ${totalSynced} 条记录`
+              : `保存完成，已重新检查最近 7 天的 ${totalSynced} 条记录`
             : "保存完成，没有发现新的历史记录",
       });
 

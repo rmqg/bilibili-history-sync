@@ -40,6 +40,12 @@ Edge 专用隐私政策：https://blog.rmqg.org/bilibili-history-sync/privacy-po
 
 开源来源说明：本扩展基于现有 MTI/Bilibili 历史记录扩展项目二次开发，当前可确认的上游项目为 Bilibili 无限历史记录 / bilibili-history-wxt，许可证为 MIT。当前版本已调整为历史记录保存与观看分析用途。
 
+## 2.0.1 更新说明
+
+- 修复自动保存可能并发运行或卡在保存状态的问题；
+- 普通更新改为重新检查最近 7 天，每周自动完整校验一次，降低缺失记录概率；
+- 新增 Safari 免费 Personal Team 签名安装脚本和详细教程。
+
 ## 2.0.0 更新说明
 
 - 产品定位调整为历史记录保存与观看分析；

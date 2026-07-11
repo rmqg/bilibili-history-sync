@@ -1,6 +1,6 @@
 # 四浏览器发布指南
 
-版本：2.0.0
+版本：2.0.1
 
 ## 1. 发布前检查
 
@@ -34,11 +34,11 @@ pnpm release:package
 
 | 商店                          | 上传文件                                                   |
 | ----------------------------- | ---------------------------------------------------------- |
-| Chrome Web Store              | `.output/bilibili-history-save-analysis-2.0.0-chrome.zip`  |
-| Microsoft Edge Add-ons        | `.output/bilibili-history-save-analysis-2.0.0-edge.zip`    |
-| Firefox Add-ons               | `.output/bilibili-history-save-analysis-2.0.0-firefox.zip` |
-| Firefox 源代码                | `.output/bilibili-history-save-analysis-2.0.0-sources.zip` |
-| Safari Web Extension Packager | `.output/bilibili-history-save-analysis-2.0.0-safari.zip`  |
+| Chrome Web Store              | `.output/bilibili-history-save-analysis-2.0.1-chrome.zip`  |
+| Microsoft Edge Add-ons        | `.output/bilibili-history-save-analysis-2.0.1-edge.zip`    |
+| Firefox Add-ons               | `.output/bilibili-history-save-analysis-2.0.1-firefox.zip` |
+| Firefox 源代码                | `.output/bilibili-history-save-analysis-2.0.1-sources.zip` |
+| Safari Web Extension Packager | `.output/bilibili-history-save-analysis-2.0.1-safari.zip`  |
 
 不要把 Firefox 源代码包当作扩展包上传。不要上传 `.output/*-mv*` 文件夹外层目录，商店要求 `manifest.json` 位于压缩包根目录。
 
@@ -90,12 +90,22 @@ bilibili-history-sync@rmqg.org
 2. 同时上传 sources ZIP，构建说明见仓库根目录 `FIREFOX_REVIEW.md`。
 3. 数据收集声明应显示“默认不收集”，并列出可选 `browsingActivity` 与 `authenticationInfo`。
 4. 详细描述必须说明云端同步默认关闭、数据只发送到用户指定地址。
-5. 上传当前版本截图、隐私政策 URL、支持 URL、MIT 许可证和 2.0.0 更新说明。
+5. 上传当前版本截图、隐私政策 URL、支持 URL、MIT 许可证和 2.0.1 更新说明。
 6. Firefox 桌面最低版本为 140；Firefox Android 最低版本为 142，以使用浏览器内置的数据传输授权。
 
 AMO 的 source code 问题选择 Yes。扩展 ZIP 上传 Firefox 包，Source code 单独上传 sources 包；Reviewer notes 可直接粘贴 `FIREFOX_REVIEW.md` 的 Reviewer notes。不要上传 Chrome、Edge 或 Safari 包。
 
 ## 6. Safari / Mac App Store
+
+### 免费方案：仅供本人使用
+
+不购买 Apple Developer Program 时，可以使用免费 Apple Account 的 Personal Team 在自己的 Mac 上签名安装：
+
+```bash
+corepack pnpm safari:install
+```
+
+面向普通用户的完整步骤见 [`docs/safari-install.md`](../safari-install.md)。该方式不能上传 Mac App Store，也不适合把签名后的应用直接分发给其他人。
 
 ### 方案 A：本机 Xcode 项目
 
@@ -110,7 +120,7 @@ corepack pnpm package:safari
 1. 打开 `.output/safari-xcode` 中生成的 Xcode 项目。
 2. 为宿主 App 和 Extension target 选择 Apple Developer Team。
 3. 把 Bundle ID 改为开发者账号中已注册且唯一的 ID；Extension ID 保持宿主 ID 的子标识。
-4. 脚本默认写入版本 `2.0.0`、构建号 `1` 和最低 macOS 13.0。每次重新上传都要增大
+4. 脚本默认写入当前版本、构建号 `1` 和最低 macOS 13.0。每次重新上传都要增大
    `SAFARI_BUILD_NUMBER`；如需改变最低版本，可设置 `SAFARI_DEPLOYMENT_TARGET`。
 5. 在真机 Safari 中测试宿主 App、扩展启用、Cookie 权限、历史保存和全部页面。
 6. 选择 Product > Archive，然后在 Organizer 中选择 Distribute App > App Store Connect。

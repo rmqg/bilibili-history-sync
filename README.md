@@ -6,7 +6,7 @@
   <p>
     <b>保存哔哩哔哩历史记录，查看观看进度、视频时长、分区和 UP 主分析</b>
     <br/>
-    Safari / Chrome / Edge / Firefox 浏览器扩展
+    Chrome / Edge / Firefox 商店扩展，Safari 可免费自行签名安装
   </p>
 </div>
 
@@ -37,6 +37,17 @@
 4. 点击「保存历史记录」，第一次使用建议勾选「重新保存全部历史」。
 5. 点击「打开记录与分析」，查看、搜索、分析和导出数据。
 
+## 安装
+
+| 浏览器  | 获取方式                                                                                           |
+| ------- | -------------------------------------------------------------------------------------------------- |
+| Chrome  | 已提交 Chrome Web Store，审核完成后开放商店安装                                                    |
+| Edge    | 已提交 Microsoft Edge Add-ons，审核完成后开放商店安装                                              |
+| Firefox | 已提交 Firefox Add-ons，审核完成后开放商店安装                                                     |
+| Safari  | 使用免费 Apple Account 在自己的 Mac 上签名安装，参见 [Safari 免费安装指南](docs/safari-install.md) |
+
+审核期间，开发者可以从 [GitHub Actions](https://github.com/rmqg/bilibili-history-sync/actions) 获取构建产物，或按下面的本地开发方式构建。不要安装来源不明的第三方打包版本。
+
 ## 本地开发
 
 ```bash
@@ -46,19 +57,20 @@ pnpm dev
 
 常用命令：
 
-| 命令                 | 说明                |
-| -------------------- | ------------------- |
-| `pnpm dev`           | Chrome 开发模式     |
-| `pnpm dev:firefox`   | Firefox 开发模式    |
-| `pnpm compile`       | TypeScript 类型检查 |
-| `pnpm format:check`  | Prettier 校验       |
-| `pnpm build`         | Chrome 生产构建     |
-| `pnpm build:safari`  | Safari 生产构建     |
-| `pnpm build:firefox` | Firefox 生产构建    |
+| 命令                  | 说明                                          |
+| --------------------- | --------------------------------------------- |
+| `pnpm dev`            | Chrome 开发模式                               |
+| `pnpm dev:firefox`    | Firefox 开发模式                              |
+| `pnpm compile`        | TypeScript 类型检查                           |
+| `pnpm format:check`   | Prettier 校验                                 |
+| `pnpm build`          | Chrome 生产构建                               |
+| `pnpm build:safari`   | Safari 生产构建                               |
+| `pnpm build:firefox`  | Firefox 生产构建                              |
+| `pnpm safari:install` | 使用免费 Apple Account 签名并安装 Safari 版本 |
 
 加载本地扩展：Chrome 打开 `chrome://extensions/`，选择「加载已解压的扩展程序」，加载 `.output/chrome-mv3-dev`。
 
-Safari 开发测试：先运行 `pnpm build:safari`，然后在 Safari 的开发者设置中允许未签名扩展，并通过“Add Temporary Extension”选择 `.output/safari-mv2/manifest.json`。
+Safari 本机安装：先在 **Xcode > Settings > Apple Accounts** 登录 Apple Account，再运行 `pnpm safari:install`。完整步骤和更新方式见 [Safari 免费安装指南](docs/safari-install.md)。
 
 ## 技术栈
 

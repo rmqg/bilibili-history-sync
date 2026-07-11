@@ -2,7 +2,7 @@
 
 Extension: 哔哩哔哩历史记录保存与分析
 
-Version: 2.0.0
+Version: 2.0.1
 
 ## Build environment
 
@@ -37,8 +37,8 @@ pnpm zip:firefox
 Outputs:
 
 ```text
-.output/bilibili-history-save-analysis-2.0.0-firefox.zip
-.output/bilibili-history-save-analysis-2.0.0-sources.zip
+.output/bilibili-history-save-analysis-2.0.1-firefox.zip
+.output/bilibili-history-save-analysis-2.0.1-sources.zip
 ```
 
 ## Reviewer notes

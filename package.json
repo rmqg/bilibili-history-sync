@@ -2,7 +2,7 @@
   "name": "bilibili-history-save-analysis",
   "description": "保存并分析哔哩哔哩历史记录",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.0.1",
   "license": "MIT",
   "author": "Bilibili History Plugin Contributors and derivative contributors",
   "homepage": "https://github.com/rmqg/bilibili-history-sync",
@@ -32,10 +32,12 @@
     "zip:safari": "wxt zip -b safari",
     "zip:firefox": "wxt zip -b firefox --sources",
     "package:safari": "wxt build -b safari && bash scripts/create-safari-project.sh",
+    "safari:install": "bash scripts/install-safari-personal.sh",
     "package:stores": "wxt zip -b chrome && wxt zip -b edge && wxt zip -b firefox --sources && wxt zip -b safari && node scripts/write-release-checksums.mjs",
     "release:package": "corepack pnpm release:check && corepack pnpm package:stores && corepack pnpm release:verify",
     "release:check": "tsc --noEmit && prettier --check . && wxt build -b chrome && wxt build -b edge && wxt build -b firefox && wxt build -b safari",
     "release:verify": "node scripts/verify-release.mjs",
+    "test": "vitest run",
     "compile": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -58,6 +60,7 @@
     "prettier": "^3.8.1",
     "tailwindcss": "3",
     "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
     "wxt": "^0.20.6"
   }
 }
